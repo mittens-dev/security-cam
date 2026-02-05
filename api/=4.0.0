@@ -1,0 +1,16 @@
+Looking in indexes: https://pypi.org/simple, https://www.piwheels.org/simple
+Collecting flask
+  Using cached https://www.piwheels.org/simple/flask/flask-3.1.2-py3-none-any.whl (103 kB)
+Collecting flask-cors
+  Using cached https://www.piwheels.org/simple/flask-cors/flask_cors-6.0.2-py3-none-any.whl (13 kB)
+Collecting blinker>=1.9.0 (from flask)
+  Using cached https://www.piwheels.org/simple/blinker/blinker-1.9.0-py3-none-any.whl (8.5 kB)
+Collecting click>=8.1.3 (from flask)
+  Using cached https://www.piwheels.org/simple/click/click-8.3.1-py3-none-any.whl (108 kB)
+Collecting itsdangerous>=2.2.0 (from flask)
+  Using cached https://www.piwheels.org/simple/itsdangerous/itsdangerous-2.2.0-py3-none-any.whl (16 kB)
+Collecting jinja2>=3.1.2 (from flask)
+  Using cached https://www.piwheels.org/simple/jinja2/jinja2-3.1.6-py3-none-any.whl (134 kB)
+Collecting markupsafe>=2.1.1 (from flask)
+  Using cached markupsafe-3.0.3.tar.gz (80 kB)
+  Installing build dependencies: started

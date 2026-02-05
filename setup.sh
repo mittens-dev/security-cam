@@ -18,24 +18,19 @@ sudo apt update && sudo apt upgrade -y
 # Install system dependencies
 echo ""
 echo "Installing system dependencies..."
-sudo apt install -y python3-pip python3-venv python3-opencv libcamera-dev python3-libcamera
+sudo apt install -y python3-pip python3-venv python3-opencv python3-numpy python3-flask python3-flask-cors python3-picamera2 libcamera-dev python3-libcamera nginx
 
-# Create virtual environment
+# Create virtual environment with system site packages access
 echo ""
-echo "Creating Python virtual environment..."
-python3 -m venv venv
+echo "Creating Python virtual environment with system packages..."
+python3 -m venv --system-site-packages venv
 
 # Activate virtual environment and install Python packages
 echo ""
 echo "Installing Python packages..."
 source venv/bin/activate
 pip install --upgrade pip
-pip install -r requirements.txt
-
-# Install picamera2 (Raspberry Pi specific)
-echo ""
-echo "Installing picamera2..."
-pip install picamera2 --upgrade
+pip install flask flask-cors
 
 # Create systemd service file
 echo ""
@@ -61,7 +56,6 @@ EOF
 # Create nginx configuration for web interface
 echo ""
 echo "Setting up web server..."
-sudo apt install -y nginx
 
 sudo tee /etc/nginx/sites-available/security-cam > /dev/null << EOF
 server {
@@ -90,8 +84,8 @@ server {
 EOF
 
 # Enable nginx site
+sudo rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-enabled/camcon
 sudo ln -sf /etc/nginx/sites-available/security-cam /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl restart nginx
 
 # Enable camera
@@ -108,6 +102,7 @@ fi
 echo ""
 echo "Setting permissions..."
 chmod +x api/security-api.py
+mkdir -p recordings logs
 chmod 755 recordings logs
 
 # Enable and start service
@@ -117,22 +112,28 @@ sudo systemctl daemon-reload
 sudo systemctl enable security-cam.service
 sudo systemctl start security-cam.service
 
+# Give service time to start
+sleep 2
+
 echo ""
 echo "=================================="
 echo "Setup Complete!"
 echo "=================================="
 echo ""
 echo "Service Status:"
-sudo systemctl status security-cam.service --no-pager
+sudo systemctl status security-cam.service --no-pager || echo "Service may still be starting..."
 echo ""
 echo "Access the web interface at:"
-echo "  http://$(hostname -I | awk '{print $1}')"
+PI_IP=$(hostname -I | awk '{print $1}')
+echo "  http://$PI_IP"
 echo ""
 echo "Useful commands:"
 echo "  sudo systemctl status security-cam   # Check status"
 echo "  sudo systemctl restart security-cam  # Restart service"
 echo "  sudo systemctl stop security-cam     # Stop service"
 echo "  sudo journalctl -u security-cam -f   # View logs"
+echo ""
+echo "API endpoint: http://$PI_IP:5000/api"
 echo ""
 echo "Note: You may need to reboot for camera changes to take effect"
 echo "      Run: sudo reboot"
