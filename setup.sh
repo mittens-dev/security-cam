@@ -1,0 +1,138 @@
+#!/bin/bash
+# Security Camera Setup Script
+
+echo "=================================="
+echo "Security Camera Setup"
+echo "=================================="
+
+# Check if running on Raspberry Pi
+if [ ! -f /proc/device-tree/model ] || ! grep -q "Raspberry Pi" /proc/device-tree/model; then
+    echo "Warning: This script is designed for Raspberry Pi"
+fi
+
+# Update system
+echo ""
+echo "Updating system packages..."
+sudo apt update && sudo apt upgrade -y
+
+# Install system dependencies
+echo ""
+echo "Installing system dependencies..."
+sudo apt install -y python3-pip python3-venv python3-opencv libcamera-dev python3-libcamera
+
+# Create virtual environment
+echo ""
+echo "Creating Python virtual environment..."
+python3 -m venv venv
+
+# Activate virtual environment and install Python packages
+echo ""
+echo "Installing Python packages..."
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Install picamera2 (Raspberry Pi specific)
+echo ""
+echo "Installing picamera2..."
+pip install picamera2 --upgrade
+
+# Create systemd service file
+echo ""
+echo "Creating systemd service..."
+sudo tee /etc/systemd/system/security-cam.service > /dev/null << EOF
+[Unit]
+Description=Security Camera API
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$(pwd)/api
+Environment="PATH=$(pwd)/venv/bin"
+ExecStart=$(pwd)/venv/bin/python3 security-api.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Create nginx configuration for web interface
+echo ""
+echo "Setting up web server..."
+sudo apt install -y nginx
+
+sudo tee /etc/nginx/sites-available/security-cam > /dev/null << EOF
+server {
+    listen 80;
+    server_name _;
+
+    # Web interface
+    location / {
+        root $(pwd)/web;
+        index index.html;
+        try_files \$uri \$uri/ =404;
+    }
+
+    # API proxy
+    location /api/ {
+        proxy_pass http://localhost:5000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+# Enable nginx site
+sudo ln -sf /etc/nginx/sites-available/security-cam /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl restart nginx
+
+# Enable camera
+echo ""
+echo "Enabling camera..."
+if ! grep -q "^start_x=1" /boot/config.txt 2>/dev/null; then
+    echo "start_x=1" | sudo tee -a /boot/config.txt
+fi
+if ! grep -q "^gpu_mem=" /boot/config.txt 2>/dev/null; then
+    echo "gpu_mem=128" | sudo tee -a /boot/config.txt
+fi
+
+# Set permissions for directories
+echo ""
+echo "Setting permissions..."
+chmod +x api/security-api.py
+chmod 755 recordings logs
+
+# Enable and start service
+echo ""
+echo "Enabling and starting service..."
+sudo systemctl daemon-reload
+sudo systemctl enable security-cam.service
+sudo systemctl start security-cam.service
+
+echo ""
+echo "=================================="
+echo "Setup Complete!"
+echo "=================================="
+echo ""
+echo "Service Status:"
+sudo systemctl status security-cam.service --no-pager
+echo ""
+echo "Access the web interface at:"
+echo "  http://$(hostname -I | awk '{print $1}')"
+echo ""
+echo "Useful commands:"
+echo "  sudo systemctl status security-cam   # Check status"
+echo "  sudo systemctl restart security-cam  # Restart service"
+echo "  sudo systemctl stop security-cam     # Stop service"
+echo "  sudo journalctl -u security-cam -f   # View logs"
+echo ""
+echo "Note: You may need to reboot for camera changes to take effect"
+echo "      Run: sudo reboot"

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Camera Monitor</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔒 Security Camera Monitor</h1>
+            <div class="status-indicator">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Initializing...</span>
+            </div>
+        </header>
+
+        <!-- Main Controls -->
+        <section class="controls-section">
+            <h2>System Controls</h2>
+            <div class="button-row">
+                <button id="startMonitoring" class="btn btn-success">▶ Start Monitoring</button>
+                <button id="stopMonitoring" class="btn btn-danger" disabled>⏹ Stop Monitoring</button>
+                <button id="startRecording" class="btn btn-primary">⏺ Manual Record</button>
+                <button id="stopRecording" class="btn btn-warning" disabled>⏹ Stop Recording</button>
+            </div>
+        </section>
+
+        <!-- Status Display -->
+        <section class="status-section">
+            <h2>Current Status</h2>
+            <div class="info-grid">
+                <div class="info-card">
+                    <span class="info-label">Monitoring:</span>
+                    <span id="monitoringStatus" class="info-value">—</span>
+                </div>
+                <div class="info-card">
+                    <span class="info-label">Recording:</span>
+                    <span id="recordingStatus" class="info-value">—</span>
+                </div>
+                <div class="info-card">
+                    <span class="info-label">Motion Detected:</span>
+                    <span id="motionStatus" class="info-value">—</span>
+                </div>
+                <div class="info-card">
+                    <span class="info-label">Last Motion:</span>
+                    <span id="lastMotion" class="info-value">—</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Configuration -->
+        <section class="config-section">
+            <h2>⚙️ Settings</h2>
+            <div class="settings-grid">
+                <div class="setting-group">
+                    <label>
+                        <input type="checkbox" id="motionEnabled" />
+                        Enable Motion Detection
+                    </label>
+                </div>
+                
+                <div class="setting-group">
+                    <label>
+                        <input type="checkbox" id="recordOnMotion" />
+                        Record on Motion Detection
+                    </label>
+                </div>
+
+                <div class="setting-group">
+                    <label for="motionThreshold">Motion Threshold (pixels):</label>
+                    <input type="number" id="motionThreshold" min="100" max="5000" step="100" />
+                </div>
+
+                <div class="setting-group">
+                    <label for="motionSensitivity">Motion Sensitivity (0-255):</label>
+                    <input type="number" id="motionSensitivity" min="1" max="255" />
+                </div>
+
+                <div class="setting-group">
+                    <label for="recordingDuration">Recording Duration (seconds):</label>
+                    <input type="number" id="recordingDuration" min="5" max="300" />
+                </div>
+
+                <div class="setting-group">
+                    <button id="saveConfig" class="btn btn-primary">💾 Save Settings</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Recent Motion Events -->
+        <section class="events-section">
+            <h2>📋 Recent Motion Events</h2>
+            <div class="events-header">
+                <button id="refreshEvents" class="btn btn-secondary">🔄 Refresh</button>
+                <span id="eventsCount">0 events</span>
+            </div>
+            <div id="eventsList" class="events-list">
+                <p class="no-data">No motion events recorded</p>
+            </div>
+        </section>
+
+        <!-- Recordings -->
+        <section class="recordings-section">
+            <h2>🎬 Recordings</h2>
+            <div class="recordings-header">
+                <button id="refreshRecordings" class="btn btn-secondary">🔄 Refresh</button>
+                <span id="recordingsCount">0 recordings</span>
+            </div>
+            <div id="recordingsList" class="recordings-list">
+                <p class="no-data">No recordings available</p>
+            </div>
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

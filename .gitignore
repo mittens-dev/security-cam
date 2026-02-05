@@ -1,0 +1,8 @@
+*.pyc
+__pycache__/
+venv/
+*.log
+.DS_Store
+recordings/*.mp4
+logs/*.json
+api/camera_state.json
