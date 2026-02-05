@@ -4,14 +4,16 @@ A complete security camera system with motion detection and timestamps for Raspb
 
 ## Features
 
-- ✅ **Real-time Motion Detection** - Detects movement using frame differencing
-- ⏰ **Timestamp Overlays** - All recordings include date/time stamps
-- 📹 **Automatic Recording** - Records video when motion is detected
-- 🌐 **Web Interface** - Modern, responsive control panel
-- 📊 **Event Logging** - Tracks all motion events with timestamps
-- ⚙️ **Configurable Settings** - Adjust sensitivity, thresholds, and recording duration
-- 💾 **Recording Management** - View, download, and delete recordings
+- ✅ **Real-time Motion Detection** - Frame differencing with optional region-based detection
+- 🎯 **Detection Zones** - Draw custom regions on camera preview for targeted motion detection
+- 📸 **Still Image Capture** - Automatic JPEG snapshot when motion is detected
+- 📹 **MP4 Recording** - Auto-records to proper MP4 format when motion triggers
+- 🌐 **Web Interface** - Modern, responsive control panel with canvas drawing
+- 📊 **Event Logging** - Tracks all motion events with timestamps and pixel counts
+- ⚙️ **Configurable Settings** - Adjust sensitivity, thresholds, recording duration, and regions
+- 💾 **Recording Management** - View, download, and delete recordings and stills
 - 🚀 **Auto-start on Boot** - Runs as a systemd service
+- 🔌 **REST API** - Complete API for integration with other systems
 
 ## Hardware Requirements
 
@@ -19,6 +21,17 @@ A complete security camera system with motion detection and timestamps for Raspb
 - Raspberry Pi Camera Module 3
 - MicroSD card (16GB+ recommended for recordings)
 - Power supply
+
+## Development Setup
+
+For development work with SSH access from your main PC, see:
+**[SSH Development Setup Guide](./SSH_DEVELOPMENT_SETUP.md)**
+
+This covers:
+- Setting up SSH key authentication
+- VS Code Remote development
+- File syncing with rsync
+- Running the dev server
 
 ## Quick Start
 
@@ -66,29 +79,31 @@ For example: `http://192.168.1.100`
 
 Access the settings panel in the web interface to configure:
 
-- **Motion Detection**: Enable/disable motion detection
-- **Motion Threshold**: Number of pixels that must change (100-5000)
-- **Motion Sensitivity**: Difference threshold for pixel changes (0-255)
-- **Record on Motion**: Automatically record when motion detected
-- **Recording Duration**: Length of recordings in seconds (5-300)
+- **Motion Threshold**: Number of pixels that must change to trigger detection (default: 100)
+- **Motion Sensitivity**: Difference threshold for pixel changes (default: 50, range: 0-255)
+- **Record on Motion**: Automatically record when motion detected (default: enabled)
+- **Recording Duration**: Length of recordings in seconds (default: 2)
+- **Detection Regions**: Draw custom zones on camera preview (optional)
+- **Use Region-Based Detection**: Enable detection only within drawn zones (default: disabled)
+- **Save Stills**: Capture JPEG snapshots on motion (default: enabled)
 
-### Advanced Configuration
+### Configuration File
 
 Edit `api/config.json` directly for advanced settings:
 
 ```json
 {
-  "motion_detection_enabled": true,
-  "motion_threshold": 500,
-  "motion_sensitivity": 25,
+  "motion_threshold": 100,
+  "motion_sensitivity": 50,
   "record_on_motion": true,
-  "recording_duration": 30,
-  "resolution": [1920, 1080],
-  "framerate": 30
+  "recording_duration": 2,
+  "detection_regions": [],
+  "use_regions": false,
+  "save_stills": true
 }
 ```
 
-After editing, restart the service:
+Restart the service after editing:
 ```bash
 sudo systemctl restart security-cam
 ```
@@ -126,17 +141,28 @@ The web interface provides:
 
 The system provides a REST API at `http://<pi-ip>:5000/api`:
 
-- `GET /api/status` - Get system status
-- `GET /api/config` - Get configuration
+**Status & Control:**
+- `GET /api/status` - Get system status (monitoring, recording, motion_detected, last_motion)
+- `GET /api/config` - Get current configuration
 - `PUT /api/config` - Update configuration
-- `POST /api/monitoring/start` - Start monitoring
+- `POST /api/monitoring/start` - Start motion detection monitoring
 - `POST /api/monitoring/stop` - Stop monitoring
+
+**Recording:**
 - `POST /api/recording/start` - Start manual recording
 - `POST /api/recording/stop` - Stop recording
-- `GET /api/events` - Get motion events
-- `GET /api/recordings` - List recordings
-- `GET /api/recordings/<filename>` - Download recording
+- `GET /api/recordings` - List all recordings
+- `GET /api/recordings/<filename>` - Download specific recording
 - `DELETE /api/recordings/<filename>` - Delete recording
+
+**Stills & Preview:**
+- `GET /api/preview` - Get current camera frame as JPEG (for region drawing)
+- `GET /api/stills` - List captured still images
+- `GET /api/stills/<filename>` - Download specific still image
+- `DELETE /api/stills/<filename>` - Delete still image
+
+**Events:**
+- `GET /api/events` - Get motion detection events log
 
 ## File Structure
 

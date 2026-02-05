@@ -90,8 +90,8 @@ fi
 echo ""
 echo "Setting permissions..."
 chmod +x api/security-api.py
-mkdir -p recordings logs
-chmod 755 recordings logs
+mkdir -p recordings logs stills
+chmod 755 recordings logs stills
 
 # Enable and start service
 echo ""
@@ -120,6 +120,9 @@ echo "  sudo systemctl status security-cam   # Check status"
 echo "  sudo systemctl restart security-cam  # Restart service"
 echo "  sudo systemctl stop security-cam     # Stop service"
 echo "  sudo journalctl -u security-cam -f   # View logs"
+echo ""
+echo "Note: For SSH development setup from your main PC, see:"
+echo "  SSH_DEVELOPMENT_SETUP.md"
 echo ""
 echo "API endpoint: http://$PI_IP:5000/api"
 echo ""

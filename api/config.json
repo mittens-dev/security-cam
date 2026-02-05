@@ -23,6 +23,6 @@
       691
     ]
   ],
-  "use_regions": false,
+  "use_regions": true,
   "save_stills": true
 }

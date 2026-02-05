@@ -115,18 +115,14 @@ def save_event(pixels):
 
 def init_camera():
     global camera
+    
+    # If camera exists, close it first to ensure clean state
     if camera is not None:
         try:
-            # Check if camera is already working
-            camera.capture_array("main")
-            return True
+            camera.close()
         except:
-            # Camera exists but failed, close it
-            try:
-                camera.close()
-            except:
-                pass
-            camera = None
+            pass
+        camera = None
     
     try:
         camera = Picamera2()
