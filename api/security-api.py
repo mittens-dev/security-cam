@@ -50,7 +50,8 @@ state = {
     'monitoring': False,
     'recording': False,
     'motion_detected': False,
-    'last_motion': None
+    'last_motion': None,
+    'recording_end_time': 0
 }
 
 motion_events = []
@@ -207,6 +208,7 @@ def record_clip(duration):
         return None
     
     state['recording'] = True
+    state['recording_end_time'] = time.time() + duration
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"motion_{ts}.mp4"
     filepath = RECORDINGS_DIR / filename
@@ -214,6 +216,7 @@ def record_clip(duration):
     print(f"Recording: {filename}", flush=True)
     
     def record_thread():
+        global camera
         try:
             encoder = H264Encoder(bitrate=4000000)
             output = FfmpegOutput(str(filepath))
@@ -227,8 +230,9 @@ def record_clip(duration):
                     break
                 time.sleep(0.1)
             
-            camera.stop_recording()
+            camera.stop_encoder()
             print(f"Saved: {filename}", flush=True)
+            print("Recording ended, ready for detection", flush=True)
             
         except Exception as e:
             print(f"Record error: {e}", flush=True)
@@ -238,6 +242,8 @@ def record_clip(duration):
                 pass
         finally:
             state['recording'] = False
+            state['recording_end_time'] = time.time()
+            print(f"Recording ended, ready for detection", flush=True)
     
     threading.Thread(target=record_thread, daemon=True).start()
     return filename
@@ -266,28 +272,31 @@ def monitor_loop():
             
             # Build region mask once at start
             region_mask = build_region_mask()
-            last_motion_time = 0
-            cooldown_seconds = 3  # Cooldown after motion detection
+            cooldown_seconds = 2  # Cooldown after recording completes
+            last_capture_time = time.time()
             
             while not stop_flag.is_set():
                 try:
+                    current_time = time.time()
+                    
                     # Skip capture while recording (camera busy)
                     if state['recording']:
                         time.sleep(0.1)
                         continue
                     
-                    # Check cooldown period
-                    time_since_motion = time.time() - last_motion_time
-                    if time_since_motion < cooldown_seconds:
+                    # Check cooldown period after recording completes
+                    time_since_recording = current_time - state.get('recording_end_time', 0)
+                    if time_since_recording < cooldown_seconds:
                         time.sleep(0.1)
                         continue
                     
                     frame = camera.capture_array("main")
+                    last_capture_time = current_time
+                    
                     motion, pixels, max_diff, motion_frame = detect_motion(frame, region_mask)
                     
                     if motion:
                         print(f"Motion: {pixels} px", flush=True)
-                        last_motion_time = time.time()
                         
                         # Save still image
                         if motion_frame is not None:
@@ -303,7 +312,22 @@ def monitor_loop():
                     time.sleep(0.1)
                 except Exception as e:
                     print(f"Frame error: {e}", flush=True)
-                    break
+                    # Try to recover instead of breaking
+                    time.sleep(1)
+                    # Reinit camera
+                    try:
+                        camera.stop()
+                    except:
+                        pass
+                    if not init_camera():
+                        break
+                    try:
+                        camera.start()
+                        prev_frame = None
+                        region_mask = build_region_mask()
+                        print("Camera restarted after error", flush=True)
+                    except:
+                        break
         
         except Exception as e:
             print(f"Monitor error: {e}", flush=True)
