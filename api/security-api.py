@@ -200,7 +200,7 @@ def detect_motion(frame, region_mask=None):
 
 
 def record_clip(duration):
-    """Record MP4 clip using FfmpegOutput"""
+    """Record MP4 clip using FfmpegOutput - non-blocking"""
     global state
     
     if state['recording']:
@@ -213,32 +213,34 @@ def record_clip(duration):
     
     print(f"Recording: {filename}", flush=True)
     
-    try:
-        encoder = H264Encoder(bitrate=4000000)
-        output = FfmpegOutput(str(filepath))
-        
-        camera.start_recording(encoder, output)
-        
-        # Record for duration
-        end_time = time.time() + duration
-        while time.time() < end_time:
-            if stop_flag.is_set():
-                break
-            time.sleep(0.5)
-        
-        camera.stop_recording()
-        print(f"Saved: {filename}", flush=True)
-        return filename
-        
-    except Exception as e:
-        print(f"Record error: {e}", flush=True)
+    def record_thread():
         try:
+            encoder = H264Encoder(bitrate=4000000)
+            output = FfmpegOutput(str(filepath))
+            
+            camera.start_recording(encoder, output)
+            
+            # Record for duration
+            end_time = time.time() + duration
+            while time.time() < end_time:
+                if stop_flag.is_set():
+                    break
+                time.sleep(0.1)
+            
             camera.stop_recording()
-        except:
-            pass
-        return None
-    finally:
-        state['recording'] = False
+            print(f"Saved: {filename}", flush=True)
+            
+        except Exception as e:
+            print(f"Record error: {e}", flush=True)
+            try:
+                camera.stop_recording()
+            except:
+                pass
+        finally:
+            state['recording'] = False
+    
+    threading.Thread(target=record_thread, daemon=True).start()
+    return filename
 
 
 def monitor_loop():
@@ -264,14 +266,28 @@ def monitor_loop():
             
             # Build region mask once at start
             region_mask = build_region_mask()
+            last_motion_time = 0
+            cooldown_seconds = 3  # Cooldown after motion detection
             
             while not stop_flag.is_set():
                 try:
+                    # Skip capture while recording (camera busy)
+                    if state['recording']:
+                        time.sleep(0.1)
+                        continue
+                    
+                    # Check cooldown period
+                    time_since_motion = time.time() - last_motion_time
+                    if time_since_motion < cooldown_seconds:
+                        time.sleep(0.1)
+                        continue
+                    
                     frame = camera.capture_array("main")
                     motion, pixels, max_diff, motion_frame = detect_motion(frame, region_mask)
                     
                     if motion:
                         print(f"Motion: {pixels} px", flush=True)
+                        last_motion_time = time.time()
                         
                         # Save still image
                         if motion_frame is not None:
