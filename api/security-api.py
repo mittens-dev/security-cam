@@ -319,15 +319,16 @@ class CameraManager:
         logger.info(f"Starting recording: {filename}")
         
         try:
-            # Configure video recording with picamera2
-            config = self.camera.create_still_configuration(
-                raw={"size": tuple(self.config.resolution)},
+            # Configure for video recording with lower resolution for performance
+            video_config = self.camera.create_video_configuration(
                 main={"size": tuple(self.config.resolution), "format": "RGB888"},
+                raw={"size": tuple(self.config.resolution)}
             )
-            self.camera.configure(config)
+            self.camera.configure(video_config)
+            self.camera.start()
             
-            # Use H264Encoder for better compatibility
-            encoder = H264Encoder()
+            # Use H264Encoder for better Raspberry Pi compatibility
+            encoder = H264Encoder(bitrate=int(4e6), framerate=self.config.framerate)
             output = FileOutput(str(filepath))
             
             self.camera.start_recording(encoder, output)
@@ -341,6 +342,8 @@ class CameraManager:
             
         except Exception as e:
             logger.error(f"Error recording video: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             try:
                 self.camera.stop_recording()
             except:
