@@ -206,7 +206,7 @@ function displayRecordings(recordings) {
                     </div>
                 </div>
                 <div class="recording-actions">
-                    <a href="${API_BASE}${rec.url}" download class="btn btn-primary btn-small">
+                    <a href="${rec.url}" download class="btn btn-primary btn-small">
                         ⬇ Download
                     </a>
                     <button onclick="deleteRecordingClick('${rec.filename}')" class="btn btn-danger btn-small">
