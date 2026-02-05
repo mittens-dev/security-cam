@@ -319,43 +319,32 @@ class CameraManager:
         logger.info(f"Starting recording: {filename}")
         
         try:
-            # Use OpenCV to record video with timestamps
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(
-                str(filepath),
-                fourcc,
-                self.config.framerate,
-                tuple(self.config.resolution)
+            # Configure video recording with picamera2
+            config = self.camera.create_still_configuration(
+                raw={"size": tuple(self.config.resolution)},
+                main={"size": tuple(self.config.resolution), "format": "RGB888"},
             )
+            self.camera.configure(config)
+            
+            # Use H264Encoder for better compatibility
+            encoder = H264Encoder()
+            output = FileOutput(str(filepath))
+            
+            self.camera.start_recording(encoder, output)
             
             start_time = time.time()
             while self.recording and (time.time() - start_time) < duration:
-                frame = self.camera.capture_array()
-                
-                # Add timestamp overlay
-                timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                cv2.putText(
-                    frame,
-                    timestamp_str,
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1,
-                    (255, 255, 255),
-                    2,
-                    cv2.LINE_AA
-                )
-                
-                # Convert RGB to BGR for OpenCV
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                out.write(frame_bgr)
-                
-                time.sleep(1.0 / self.config.framerate)
+                time.sleep(0.1)
             
-            out.release()
+            self.camera.stop_recording()
             logger.info(f"Recording saved: {filename}")
             
         except Exception as e:
             logger.error(f"Error recording video: {e}")
+            try:
+                self.camera.stop_recording()
+            except:
+                pass
         finally:
             self.recording = False
             self.current_recording_file = None
