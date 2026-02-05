@@ -57,6 +57,7 @@ motion_events = []
 camera = None
 prev_frame = None
 stop_flag = threading.Event()
+monitor_thread = None
 
 
 # === CONFIG ===
@@ -319,6 +320,8 @@ def api_status():
 
 @app.route('/api/config', methods=['GET', 'PUT', 'POST'])
 def api_config():
+    global monitor_thread
+    
     if request.method == 'GET':
         return jsonify(config)
     
@@ -336,17 +339,23 @@ def api_config():
     if regions_changed and state['monitoring']:
         print("[API] Regions changed, stopping monitor to rebuild mask", flush=True)
         stop_flag.set()
+        # Wait for thread to fully exit
+        if monitor_thread and monitor_thread.is_alive():
+            monitor_thread.join(timeout=2)
         time.sleep(0.5)
         stop_flag.clear()
+        state['monitoring'] = True
         # Restart monitoring thread
-        threading.Thread(target=monitor_loop, daemon=True).start()
+        monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+        monitor_thread.start()
+        print("[API] Monitor restarted with new mask", flush=True)
     
     return jsonify({'success': True, 'config': config})
 
 
 @app.route('/api/monitoring/start', methods=['POST'])
 def api_start():
-    global state
+    global state, monitor_thread
     
     print("[API] Start request", flush=True)
     
@@ -357,8 +366,8 @@ def api_start():
     print("[API] Starting thread", flush=True)
     stop_flag.clear()
     state['monitoring'] = True
-    t = threading.Thread(target=monitor_loop, daemon=True)
-    t.start()
+    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    monitor_thread.start()
     time.sleep(0.5)
     print(f"[API] Done, monitoring={state['monitoring']}", flush=True)
     
@@ -367,9 +376,18 @@ def api_start():
 
 @app.route('/api/monitoring/stop', methods=['POST'])
 def api_stop():
+    global monitor_thread
+    
+    print("[API] Stop request", flush=True)
     stop_flag.set()
     state['monitoring'] = False
+    
+    # Wait for thread to fully exit
+    if monitor_thread and monitor_thread.is_alive():
+        monitor_thread.join(timeout=2)
+    
     time.sleep(0.5)
+    print("[API] Monitoring stopped", flush=True)
     return jsonify({'success': True, 'status': state})
 
 
