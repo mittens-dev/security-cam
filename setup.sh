@@ -18,19 +18,7 @@ sudo apt update && sudo apt upgrade -y
 # Install system dependencies
 echo ""
 echo "Installing system dependencies..."
-sudo apt install -y python3-pip python3-venv python3-opencv python3-numpy python3-flask python3-flask-cors python3-picamera2 libcamera-dev python3-libcamera nginx
-
-# Create virtual environment with system site packages access
-echo ""
-echo "Creating Python virtual environment with system packages..."
-python3 -m venv --system-site-packages venv
-
-# Activate virtual environment and install Python packages
-echo ""
-echo "Installing Python packages..."
-source venv/bin/activate
-pip install --upgrade pip
-pip install flask flask-cors
+sudo apt install -y python3-pip python3-opencv python3-flask python3-flask-cors python3-picamera2 libcamera-dev python3-libcamera nginx ffmpeg
 
 # Create systemd service file
 echo ""
@@ -44,8 +32,8 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$(pwd)/api
-Environment="PATH=$(pwd)/venv/bin"
-ExecStart=$(pwd)/venv/bin/python3 security-api.py
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/usr/bin/python3 $(pwd)/api/security-api.py
 Restart=always
 RestartSec=10
 

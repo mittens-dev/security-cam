@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Raspberry Pi Camera 3 Security System
-Simple motion detection with H.264 recording
+Simple motion detection with MP4 recording
 """
+import sys
 import json
 import time
 import threading
@@ -14,15 +15,20 @@ from picamera2 import Picamera2
 from picamera2.encoders import H264Encoder
 from picamera2.outputs import FfmpegOutput
 import cv2
+import numpy as np
+import io
+from PIL import Image
 
 # === PATHS ===
 BASE_DIR = Path(__file__).parent.parent
 RECORDINGS_DIR = BASE_DIR / 'recordings'
+STILLS_DIR = BASE_DIR / 'stills'
 LOGS_DIR = BASE_DIR / 'logs'
 CONFIG_FILE = BASE_DIR / 'api' / 'config.json'
 EVENTS_FILE = LOGS_DIR / 'motion_events.json'
 
 RECORDINGS_DIR.mkdir(exist_ok=True)
+STILLS_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
 
 # === FLASK APP ===
@@ -34,7 +40,10 @@ config = {
     'motion_threshold': 500,
     'motion_sensitivity': 25,
     'record_on_motion': True,
-    'recording_duration': 10
+    'recording_duration': 10,
+    'detection_regions': [],  # [[x1,y1,x2,y2], ...]
+    'use_regions': False,
+    'save_stills': True
 }
 
 state = {
@@ -59,7 +68,7 @@ def load_config():
             with open(CONFIG_FILE) as f:
                 config.update(json.load(f))
     except Exception as e:
-        print(f"Config error: {e}")
+        print(f"Config error: {e}", flush=True)
 
 
 def save_config():
@@ -67,7 +76,7 @@ def save_config():
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
     except Exception as e:
-        print(f"Save config error: {e}")
+        print(f"Save config error: {e}", flush=True)
 
 
 def load_events():
@@ -106,25 +115,68 @@ def save_event(pixels):
 def init_camera():
     global camera
     if camera is not None:
-        return True
+        try:
+            # Check if camera is already working
+            camera.capture_array("main")
+            return True
+        except:
+            # Camera exists but failed, close it
+            try:
+                camera.close()
+            except:
+                pass
+            camera = None
     
     try:
         camera = Picamera2()
-        # Simple video config - 720p is plenty for security
         cfg = camera.create_video_configuration(
             main={"size": (1280, 720), "format": "BGR888"}
         )
         camera.configure(cfg)
-        print("Camera ready")
+        print("Camera initialized", flush=True)
         return True
     except Exception as e:
-        print(f"Camera init failed: {e}")
+        print(f"Camera init failed: {e}", flush=True)
         camera = None
         return False
 
 
-def detect_motion(frame):
-    """Frame difference motion detection"""
+def save_still_image(frame):
+    """Save still JPEG image when motion detected"""
+    if not config.get('save_stills', True):
+        return None
+    
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"motion_{ts}.jpg"
+    filepath = STILLS_DIR / filename
+    
+    try:
+        # Convert BGR to RGB
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(rgb)
+        img.save(filepath, 'JPEG', quality=85)
+        print(f"Still saved: {filename}", flush=True)
+        return filename
+    except Exception as e:
+        print(f"Still save error: {e}", flush=True)
+        return None
+
+
+def build_region_mask():
+    """Pre-compute region mask for faster detection"""
+    if not config.get('use_regions') or not config.get('detection_regions'):
+        return None
+    
+    # Create mask with camera resolution
+    mask = np.zeros((720, 1280), dtype=np.uint8)
+    for region in config['detection_regions']:
+        x1, y1, x2, y2 = region
+        mask[y1:y2, x1:x2] = 255
+    return mask
+
+
+def detect_motion(frame, region_mask=None):
+    """Frame difference motion detection with optional region masking"""
     global prev_frame
     
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -132,14 +184,22 @@ def detect_motion(frame):
     
     if prev_frame is None:
         prev_frame = gray
-        return False, 0
+        return False, 0, 0, None
     
     delta = cv2.absdiff(prev_frame, gray)
+    max_diff = int(delta.max())
+    
+    # Apply pre-computed region mask if provided
+    if region_mask is not None:
+        delta = cv2.bitwise_and(delta, region_mask)
+    
     thresh = cv2.threshold(delta, config['motion_sensitivity'], 255, cv2.THRESH_BINARY)[1]
     pixels = cv2.countNonZero(thresh)
+    
     prev_frame = gray
     
-    return pixels > config['motion_threshold'], pixels
+    motion = pixels > config['motion_threshold']
+    return motion, pixels, max_diff, frame if motion else None
 
 
 def record_clip(duration):
@@ -154,7 +214,7 @@ def record_clip(duration):
     filename = f"motion_{ts}.mp4"
     filepath = RECORDINGS_DIR / filename
     
-    print(f"Recording: {filename}")
+    print(f"Recording: {filename}", flush=True)
     
     try:
         encoder = H264Encoder(bitrate=4000000)
@@ -170,11 +230,11 @@ def record_clip(duration):
             time.sleep(0.5)
         
         camera.stop_recording()
-        print(f"Saved: {filename}")
+        print(f"Saved: {filename}", flush=True)
         return filename
         
     except Exception as e:
-        print(f"Record error: {e}")
+        print(f"Record error: {e}", flush=True)
         try:
             camera.stop_recording()
         except:
@@ -188,36 +248,66 @@ def monitor_loop():
     """Main loop - capture frames, detect motion, record"""
     global prev_frame, state
     
-    if not init_camera():
-        state['monitoring'] = False
-        return
+    print("Monitor loop starting...", flush=True)
+    state['monitoring'] = True
     
-    camera.start()
-    prev_frame = None
-    print("Monitoring started")
-    
-    try:
-        while not stop_flag.is_set():
-            frame = camera.capture_array("main")
-            motion, pixels = detect_motion(frame)
+    retry_count = 0
+    while not stop_flag.is_set() and retry_count < 3:
+        if not init_camera():
+            print(f"Camera init failed (retry {retry_count+1}/3)", flush=True)
+            retry_count += 1
+            time.sleep(2)
+            continue
+        
+        try:
+            camera.start()
+            prev_frame = None
+            print("Monitoring active", flush=True)
+            retry_count = 0
             
-            if motion:
-                print(f"Motion: {pixels} px")
-                save_event(pixels)
-                
-                if config['record_on_motion'] and not state['recording']:
-                    record_clip(config['recording_duration'])
-            else:
-                state['motion_detected'] = False
+            # Build region mask once at start
+            region_mask = build_region_mask()
             
-            time.sleep(0.1)  # ~10 fps
+            while not stop_flag.is_set():
+                try:
+                    frame = camera.capture_array("main")
+                    motion, pixels, max_diff, motion_frame = detect_motion(frame, region_mask)
+                    
+                    if motion:
+                        print(f"Motion: {pixels} px", flush=True)
+                        
+                        # Save still image
+                        if motion_frame is not None:
+                            save_still_image(motion_frame)
+                        
+                        save_event(pixels)
+                        
+                        if config['record_on_motion'] and not state['recording']:
+                            record_clip(config['recording_duration'])
+                    else:
+                        state['motion_detected'] = False
+                    
+                    time.sleep(0.1)
+                except Exception as e:
+                    print(f"Frame error: {e}", flush=True)
+                    break
+        
+        except Exception as e:
+            print(f"Monitor error: {e}", flush=True)
+            retry_count += 1
+        
+        finally:
+            try:
+                camera.stop()
+            except:
+                pass
+        
+        if not stop_flag.is_set():
+            print(f"Restarting monitor (attempt {retry_count+1})", flush=True)
+            time.sleep(1)
     
-    except Exception as e:
-        print(f"Monitor error: {e}")
-    finally:
-        camera.stop()
-        state['monitoring'] = False
-        print("Monitoring stopped")
+    state['monitoring'] = False
+    print("Monitoring stopped", flush=True)
 
 
 # === API ROUTES ===
@@ -227,16 +317,30 @@ def api_status():
     return jsonify(state)
 
 
-@app.route('/api/config', methods=['GET', 'PUT'])
+@app.route('/api/config', methods=['GET', 'PUT', 'POST'])
 def api_config():
     if request.method == 'GET':
         return jsonify(config)
     
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
+    
+    # Check if regions changed
+    regions_changed = 'detection_regions' in data or 'use_regions' in data
+    
     for k, v in data.items():
         if k in config:
             config[k] = v
     save_config()
+    
+    # If regions changed and monitoring, need to restart to rebuild mask
+    if regions_changed and state['monitoring']:
+        print("[API] Regions changed, stopping monitor to rebuild mask", flush=True)
+        stop_flag.set()
+        time.sleep(0.5)
+        stop_flag.clear()
+        # Restart monitoring thread
+        threading.Thread(target=monitor_loop, daemon=True).start()
+    
     return jsonify({'success': True, 'config': config})
 
 
@@ -244,13 +348,19 @@ def api_config():
 def api_start():
     global state
     
+    print("[API] Start request", flush=True)
+    
     if state['monitoring']:
+        print("[API] Already monitoring", flush=True)
         return jsonify({'success': True, 'status': state})
     
+    print("[API] Starting thread", flush=True)
     stop_flag.clear()
     state['monitoring'] = True
-    threading.Thread(target=monitor_loop, daemon=True).start()
+    t = threading.Thread(target=monitor_loop, daemon=True)
+    t.start()
     time.sleep(0.5)
+    print(f"[API] Done, monitoring={state['monitoring']}", flush=True)
     
     return jsonify({'success': True, 'status': state})
 
@@ -318,11 +428,73 @@ def api_recording(filename):
     return send_from_directory(RECORDINGS_DIR, filename)
 
 
+@app.route('/api/preview', methods=['GET'])
+def api_preview():
+    """Get current camera frame for region drawing"""
+    global camera
+    
+    # Initialize camera if needed
+    if camera is None:
+        if not init_camera():
+            return jsonify({'error': 'Camera not available'}), 503
+    
+    try:
+        # Start camera if not running
+        if not camera.started:
+            camera.start()
+            time.sleep(0.5)
+        
+        frame = camera.capture_array("main")
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(rgb)
+        
+        buf = io.BytesIO()
+        img.save(buf, 'JPEG', quality=85)
+        buf.seek(0)
+        
+        from flask import send_file
+        return send_file(buf, mimetype='image/jpeg')
+    except Exception as e:
+        print(f"Preview error: {e}", flush=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/stills', methods=['GET'])
+def api_stills():
+    """List still images"""
+    stills = []
+    for f in sorted(STILLS_DIR.glob('*.jpg'), reverse=True):
+        s = f.stat()
+        stills.append({
+            'filename': f.name,
+            'size': s.st_size,
+            'created': datetime.fromtimestamp(s.st_ctime).isoformat(),
+            'url': f'/api/stills/{f.name}'
+        })
+    return jsonify({'stills': stills})
+
+
+@app.route('/api/stills/<filename>', methods=['GET', 'DELETE'])
+def api_still(filename):
+    """Get or delete still image"""
+    fp = STILLS_DIR / filename
+    
+    if request.method == 'DELETE':
+        if fp.exists():
+            fp.unlink()
+            return jsonify({'success': True})
+        return jsonify({'error': 'Not found'}), 404
+    
+    if not fp.exists():
+        return jsonify({'error': 'Not found'}), 404
+    return send_from_directory(STILLS_DIR, filename)
+
+
 # === MAIN ===
 
 if __name__ == '__main__':
-    print("Security Camera API")
+    print("Security Camera API", flush=True)
     load_config()
     load_events()
-    print(f"Config: {config}")
+    print(f"Config: {config}", flush=True)
     app.run(host='0.0.0.0', port=5000, threaded=True)

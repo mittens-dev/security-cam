@@ -56,13 +56,6 @@
             <div class="settings-grid">
                 <div class="setting-group">
                     <label>
-                        <input type="checkbox" id="motionEnabled" />
-                        Enable Motion Detection
-                    </label>
-                </div>
-                
-                <div class="setting-group">
-                    <label>
                         <input type="checkbox" id="recordOnMotion" />
                         Record on Motion Detection
                     </label>
@@ -89,7 +82,7 @@
             </div>
         </section>
 
-        <!-- Recent Motion Events -->
+        <!-- Recent Motion Events --> -->
         <section class="events-section">
             <h2>📋 Recent Motion Events</h2>
             <div class="events-header">
@@ -112,6 +105,42 @@
                 <p class="no-data">No recordings available</p>
             </div>
         </section>
+
+        <!-- Detection Regions -->
+        <section class="regions-section">
+            <h2>🎯 Detection Regions</h2>
+            <div class="regions-controls">
+                <button id="drawRegions" class="btn btn-primary">✏️ Draw Detection Zones</button>
+                <button id="clearRegions" class="btn btn-danger">🗑 Clear All Zones</button>
+                <label>
+                    <input type="checkbox" id="useRegions" />
+                    Use Region-Based Detection
+                </label>
+                <span id="regionsCount">0 regions defined</span>
+            </div>
+        </section>
+    </div>
+
+    <!-- Region Drawing Modal -->
+    <div id="regionModal" class="modal">
+        <div class="modal-content">
+            <h2>Draw Detection Regions</h2>
+            <p>Click and drag on the image to draw green rectangles. Click on a region in the list to delete it.</p>
+            <div class="modal-body">
+                <div class="canvas-container">
+                    <canvas id="regionCanvas"></canvas>
+                </div>
+                <div class="regions-list-panel">
+                    <h3>Regions (<span id="modalRegionsCount">0</span>)</h3>
+                    <div id="regionsList"></div>
+                    <button id="deleteSelected" class="btn btn-danger btn-small" style="display:none;">🗑 Delete Selected</button>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <button id="saveRegions" class="btn btn-success">💾 Save Regions</button>
+                <button id="cancelRegions" class="btn btn-secondary">✓ Done</button>
+            </div>
+        </div>
     </div>
 
     <script src="script.js"></script>
