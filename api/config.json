@@ -1,14 +1,1 @@
-{
-  "motion_detection_enabled": true,
-  "motion_threshold": 500,
-  "motion_sensitivity": 25,
-  "record_on_motion": true,
-  "recording_duration": 30,
-  "continuous_recording": false,
-  "resolution": [
-    1920,
-    1080
-  ],
-  "framerate": 30,
-  "detection_area": null
-}
+{"motion_threshold":500,"motion_sensitivity":25,"record_on_motion":true,"recording_duration":10}

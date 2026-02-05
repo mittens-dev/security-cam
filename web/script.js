@@ -1,8 +1,6 @@
 // Security Camera Monitor - Frontend JavaScript
 
-const API_BASE = window.location.hostname === 'localhost' 
-    ? 'http://localhost:5000/api' 
-    : `http://${window.location.hostname}:5000/api`;
+const API_BASE = '/api';
 
 // State
 let state = {
@@ -147,7 +145,10 @@ function updateStatusDisplay(status) {
 }
 
 function updateConfigDisplay(config) {
-    elements.motionEnabled.checked = config.motion_detection_enabled;
+    // motionEnabled checkbox removed - motion detection is always on when monitoring
+    if (elements.motionEnabled) {
+        elements.motionEnabled.checked = true;  // Always enabled
+    }
     elements.recordOnMotion.checked = config.record_on_motion;
     elements.motionThreshold.value = config.motion_threshold;
     elements.motionSensitivity.value = config.motion_sensitivity;
@@ -225,7 +226,9 @@ function displayRecordings(recordings) {
 elements.startMonitoring.addEventListener('click', async () => {
     try {
         const result = await startMonitoring();
-        updateStatusDisplay(result.status);
+        if (result.status) {
+            updateStatusDisplay(result.status);
+        }
         showAlert('Monitoring started', 'success');
     } catch (error) {
         console.error('Failed to start monitoring:', error);
@@ -235,7 +238,9 @@ elements.startMonitoring.addEventListener('click', async () => {
 elements.stopMonitoring.addEventListener('click', async () => {
     try {
         const result = await stopMonitoring();
-        updateStatusDisplay(result.status);
+        if (result.status) {
+            updateStatusDisplay(result.status);
+        }
         showAlert('Monitoring stopped', 'success');
     } catch (error) {
         console.error('Failed to stop monitoring:', error);
@@ -245,7 +250,9 @@ elements.stopMonitoring.addEventListener('click', async () => {
 elements.startRecording.addEventListener('click', async () => {
     try {
         const result = await startRecording();
-        updateStatusDisplay(result.status);
+        if (result.status) {
+            updateStatusDisplay(result.status);
+        }
         elements.stopRecording.disabled = false;
         showAlert('Recording started', 'success');
     } catch (error) {
@@ -256,7 +263,9 @@ elements.startRecording.addEventListener('click', async () => {
 elements.stopRecording.addEventListener('click', async () => {
     try {
         const result = await stopRecording();
-        updateStatusDisplay(result.status);
+        if (result.status) {
+            updateStatusDisplay(result.status);
+        }
         elements.stopRecording.disabled = true;
         showAlert('Recording stopped', 'success');
         // Refresh recordings list
@@ -269,7 +278,6 @@ elements.stopRecording.addEventListener('click', async () => {
 elements.saveConfig.addEventListener('click', async () => {
     try {
         const config = {
-            motion_detection_enabled: elements.motionEnabled.checked,
             record_on_motion: elements.recordOnMotion.checked,
             motion_threshold: parseInt(elements.motionThreshold.value),
             motion_sensitivity: parseInt(elements.motionSensitivity.value),
@@ -290,9 +298,12 @@ elements.refreshRecordings.addEventListener('click', loadRecordings);
 
 async function loadStatus() {
     try {
-        const data = await getStatus();
-        updateStatusDisplay(data.status);
-        updateConfigDisplay(data.config);
+        const status = await getStatus();
+        updateStatusDisplay(status);
+        
+        // Load config separately
+        const config = await getConfig();
+        updateConfigDisplay(config);
     } catch (error) {
         console.error('Failed to load status:', error);
     }
