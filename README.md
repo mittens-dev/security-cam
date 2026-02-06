@@ -22,6 +22,23 @@ A complete security camera system with motion detection and timestamps for Raspb
 - MicroSD card (16GB+ recommended for recordings)
 - Power supply
 
+## Quick Start
+
+### 1. Network Configuration (One-Time Setup)
+Configure static IP based on device type:
+```bash
+sudo ./configure_network.sh
+```
+- Pi4 → eth0 → 192.168.4.175
+- Pi Zero → wlan0 → 192.168.4.176
+
+See [Network Configuration Guide](./NETWORK_CONFIG.md) for details.
+
+### 2. Install Dependencies
+```bash
+./setup.sh
+```
+
 ## Development Setup
 
 For development work with SSH access from your main PC, see:

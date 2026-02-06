@@ -1,5 +1,10 @@
 #!/bin/bash
 # Security Camera Setup Script
+# 
+# IMPORTANT: Run network configuration first:
+#   sudo ./configure_network.sh
+# 
+# Then run this script to install dependencies
 
 echo "=================================="
 echo "Security Camera Setup"
@@ -18,7 +23,26 @@ sudo apt update && sudo apt upgrade -y
 # Install system dependencies
 echo ""
 echo "Installing system dependencies..."
-sudo apt install -y python3-pip python3-opencv python3-flask python3-flask-cors python3-picamera2 libcamera-dev python3-libcamera nginx ffmpeg
+sudo apt install -y python3-pip python3-opencv python3-flask python3-flask-cors python3-picamera2 libcamera-dev python3-libcamera nginx ffmpeg avahi-daemon
+
+# Setup hostname for mDNS
+echo ""
+echo "Configuring hostname for network discovery..."
+read -p "Enter a unique hostname for this device (e.g., security-cam-pi4 or security-cam-zero): " HOSTNAME
+if [ -n "$HOSTNAME" ]; then
+    sudo hostnamectl set-hostname "$HOSTNAME"
+    sudo sed -i "s/127.0.1.1.*/127.0.1.1 $HOSTNAME/" /etc/hosts
+    echo "✓ Hostname set to: $HOSTNAME"
+else
+    echo "Using default hostname"
+fi
+
+# Enable mDNS service
+echo ""
+echo "Enabling mDNS (Avahi) for hostname discovery..."
+sudo systemctl enable avahi-daemon
+sudo systemctl restart avahi-daemon
+echo "✓ mDNS enabled - device accessible at: $(hostname).local"
 
 # Create systemd service file
 echo ""
