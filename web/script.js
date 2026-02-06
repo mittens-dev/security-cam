@@ -275,7 +275,6 @@ elements.stopRecording.addEventListener('click', async () => {
 elements.saveConfig.addEventListener('click', async () => {
     try {
         const config = {
-            motion_detection_enabled: elements.motionEnabled.checked,
             record_on_motion: elements.recordOnMotion.checked,
             motion_threshold: parseInt(elements.motionThreshold.value),
             motion_sensitivity: parseInt(elements.motionSensitivity.value),
