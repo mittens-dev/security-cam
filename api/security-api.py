@@ -204,6 +204,41 @@ def init_camera():
         return False
 
 
+def archive_old_stills():
+    """Move stills from previous days into dated subfolders (YYYY-MM-DD format).
+    Called once daily at midnight via cron, or manually via API.
+    """
+    today = datetime.now().date()
+    today_str = today.isoformat()  # e.g., "2026-02-08"
+    
+    archived_count = 0
+    for jpg_file in STILLS_DIR.glob('*.jpg'):
+        try:
+            # Extract date from filename: motion_YYYYMMDD_...
+            parts = jpg_file.name.split('_')
+            if len(parts) >= 2 and parts[0] == 'motion':
+                # Parse YYYYMMDD from filename
+                date_str = parts[1]  # e.g., "20260207"
+                if len(date_str) == 8:
+                    file_date = datetime.strptime(date_str, '%Y%m%d').date()
+                    file_date_str = file_date.isoformat()  # e.g., "2026-02-07"
+                    
+                    # If file is from yesterday or earlier, move it
+                    if file_date < today:
+                        target_dir = STILLS_DIR / file_date_str
+                        target_dir.mkdir(exist_ok=True)
+                        target_path = target_dir / jpg_file.name
+                        jpg_file.rename(target_path)
+                        archived_count += 1
+                        print(f"[archive] Moved {jpg_file.name} → {file_date_str}/", flush=True)
+        except Exception as e:
+            print(f"[archive] Error processing {jpg_file.name}: {e}", flush=True)
+    
+    if archived_count > 0:
+        print(f"[archive] Archived {archived_count} stills", flush=True)
+    return archived_count
+
+
 def capture_burst(count=None, interval=None):
     """Capture a burst of still images from the running camera.
     Uses captured_request() — lightweight, no encoder needed.
@@ -237,8 +272,12 @@ def capture_burst(count=None, interval=None):
                 else:
                     img = frame_to_image(frame)
 
+                # Organize stills into dated subfolders (YYYY-MM-DD)
+                date_folder = STILLS_DIR / datetime.now().strftime("%Y-%m-%d")
+                date_folder.mkdir(exist_ok=True)
+
                 filename = f"motion_{ts_base}_burst{i+1}.jpg"
-                filepath = STILLS_DIR / filename
+                filepath = date_folder / filename
                 img.save(str(filepath), 'JPEG', quality=90)
                 filenames.append(filename)
                 print(f"Burst {i+1}/{count}: {filename}", flush=True)
@@ -555,20 +594,24 @@ def api_recording(filename):
 @app.route('/api/stills', methods=['GET'])
 def api_stills():
     stills = []
-    for f in sorted(STILLS_DIR.glob('*.jpg'), reverse=True):
+    # Recursively glob for JPEGs in all date subfolders
+    for f in sorted(STILLS_DIR.glob('**/*.jpg'), reverse=True):
         s = f.stat()
+        # Store relative path from STILLS_DIR for the URL
+        rel_path = f.relative_to(STILLS_DIR)
         stills.append({
             'filename': f.name,
             'size': s.st_size,
             'created': datetime.fromtimestamp(s.st_ctime).isoformat(),
-            'url': f'/api/stills/{f.name}'
+            'url': f'/api/stills/{rel_path}'
         })
     return jsonify({'stills': stills})
 
 
-@app.route('/api/stills/<filename>', methods=['GET', 'DELETE'])
-def api_still(filename):
-    fp = STILLS_DIR / filename
+@app.route('/api/stills/<path:filepath>', methods=['GET', 'DELETE'])
+def api_still(filepath):
+    # Handle paths like "2026-02-08/motion_...jpg"
+    fp = STILLS_DIR / filepath
 
     if request.method == 'DELETE':
         if fp.exists():
@@ -578,13 +621,14 @@ def api_still(filename):
 
     if not fp.exists():
         return jsonify({'error': 'Not found'}), 404
-    return send_from_directory(STILLS_DIR, filename)
+    return send_from_directory(STILLS_DIR, filepath)
 
 
 @app.route('/api/stills/all', methods=['DELETE'])
 def api_delete_all_stills():
     count = 0
-    for f in STILLS_DIR.glob('*.jpg'):
+    # Recursively delete from all date subfolders
+    for f in STILLS_DIR.glob('**/*.jpg'):
         try:
             f.unlink()
             count += 1
@@ -811,10 +855,14 @@ def auto_calibration_loop():
 # === MAIN ===
 
 if __name__ == '__main__':
-    print("Security Camera API (v5 - Stills Only, Auto-Exposure)", flush=True)
+    print("Security Camera API (v6 - Auto-Brightness + Archiving)", flush=True)
     load_config()
     load_events()
     print(f"Config: {config}", flush=True)
+
+    # Archive old stills on startup
+    print("Archiving old stills...", flush=True)
+    archive_old_stills()
 
     # Auto-start monitoring on service boot
     print("Auto-starting monitoring...", flush=True)

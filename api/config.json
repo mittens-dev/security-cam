@@ -25,10 +25,10 @@
       465
     ],
     [
-      872,
-      433,
-      1039,
-      496
+      946,
+      428,
+      1075,
+      513
     ]
   ],
   "use_regions": true,
@@ -36,8 +36,8 @@
   "camera_settings": {
     "exposure_time": 2600,
     "analogue_gain": 1,
-    "brightness": 0.2,
-    "contrast": 1.45,
+    "brightness": 0.01,
+    "contrast": 1.29,
     "saturation": 1.5,
     "awb_mode": 5,
     "still_saturation": 0.6,
