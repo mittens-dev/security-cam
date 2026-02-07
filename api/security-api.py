@@ -272,12 +272,9 @@ def capture_burst(count=None, interval=None):
                 else:
                     img = frame_to_image(frame)
 
-                # Organize stills into dated subfolders (YYYY-MM-DD)
-                date_folder = STILLS_DIR / datetime.now().strftime("%Y-%m-%d")
-                date_folder.mkdir(exist_ok=True)
-
+                # Save to root stills folder; archive_old_stills() will move to dated folders
                 filename = f"motion_{ts_base}_burst{i+1}.jpg"
-                filepath = date_folder / filename
+                filepath = STILLS_DIR / filename
                 img.save(str(filepath), 'JPEG', quality=90)
                 filenames.append(filename)
                 print(f"Burst {i+1}/{count}: {filename}", flush=True)
@@ -635,6 +632,16 @@ def api_delete_all_stills():
         except:
             pass
     return jsonify({'success': True, 'deleted': count})
+
+
+@app.route('/api/archive', methods=['POST'])
+def api_archive():
+    """Archive stills from previous days into dated subfolders"""
+    try:
+        archived = archive_old_stills()
+        return jsonify({'success': True, 'archived': archived})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/preview', methods=['GET'])

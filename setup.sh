@@ -127,6 +127,14 @@ sudo systemctl start security-cam.service
 # Give service time to start
 sleep 2
 
+# Setup daily archiving cron job
+echo ""
+echo "Setting up daily archiving cron job..."
+CRON_JOB="0 0 * * * curl -s -X POST http://localhost:5000/api/archive > /dev/null 2>&1"
+CRON_CMD="(crontab -l 2>/dev/null | grep -v '/api/archive'; echo \"$CRON_JOB\") | crontab -"
+sudo -u $(logname) bash -c "$CRON_CMD" 2>/dev/null || echo "Note: Cron job setup skipped (may require manual setup)"
+echo "✓ Daily archiving scheduled for midnight (00:00)"
+
 echo ""
 echo "=================================="
 echo "Setup Complete!"

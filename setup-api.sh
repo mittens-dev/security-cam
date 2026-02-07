@@ -57,6 +57,13 @@ sleep 2
 echo -e "${GREEN}✓ Service enabled and started${NC}"
 echo ""
 
+echo -e "${YELLOW}Setting up daily archiving cron job...${NC}"
+CRON_JOB="0 0 * * * curl -s -X POST http://localhost:5000/api/archive > /dev/null 2>&1"
+CRON_CMD="(crontab -l 2>/dev/null | grep -v '/api/archive'; echo \"$CRON_JOB\") | crontab -"
+sudo -u $(logname) bash -c "$CRON_CMD" 2>/dev/null || echo -e "${YELLOW}Note: Cron job setup may require manual setup${NC}"
+echo -e "${GREEN}✓ Daily archiving scheduled for midnight (00:00)${NC}"
+echo ""
+
 echo -e "${GREEN}════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}API setup complete!${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════${NC}"
