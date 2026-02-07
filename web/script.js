@@ -656,10 +656,11 @@ function setupCameraSettingsModal() {
             console.error('stillPreview element not found');
             return;
         }
+        // At 12MP resolution, frame processing takes 3-5 seconds
         cameraSettingsPreviewInterval = setInterval(() => {
             stillPreview.src = `/api/frame-with-still-processing?t=${Date.now()}`;
-        }, 1000);
-        console.log('Preview started');
+        }, 4000);  // Refresh every 4 seconds instead of 1
+        console.log('Preview started (4s refresh for 12MP)');
     }
 
     function stopPreview() {

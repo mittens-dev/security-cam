@@ -75,7 +75,7 @@ calibration_stop = threading.Event()
 monitor_thread = None
 
 LORES_SIZE = (320, 240)
-MAIN_SIZE = (1280, 720)
+MAIN_SIZE = (2304, 1296)  # 3MP resolution
 
 # Auto-calibration targets
 CALIB_INTERVAL = 300        # 5 minutes between calibrations
@@ -410,7 +410,8 @@ def monitor_loop():
 
                         if config.get('capture_on_motion', True):
                             state['capturing'] = True
-                            capture_burst()
+                            with camera_lock:
+                                capture_burst()
                             state['capturing'] = False
 
                             cooldown = config.get('cooldown_seconds', 5)
@@ -545,7 +546,8 @@ def api_snapshot():
 
     state['capturing'] = True
     try:
-        filenames = capture_burst(count=count)
+        with camera_lock:
+            filenames = capture_burst(count=count)
         return jsonify({'success': True, 'filenames': filenames, 'status': state})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -649,17 +651,13 @@ def api_preview():
     """Get current camera frame for region drawing"""
     global camera
 
-    if camera is None:
-        if not init_camera():
-            return jsonify({'error': 'Camera not available'}), 503
+    if not state['monitoring'] or camera is None or not camera.started:
+        return jsonify({'error': 'Start monitoring first'}), 400
 
     try:
-        if not camera.started:
-            camera.start()
-            time.sleep(0.5)
-
-        with camera.captured_request() as req:
-            frame = req.make_array("main")
+        with camera_lock:
+            with camera.captured_request() as req:
+                frame = req.make_array("main")
 
         buf = frame_to_jpeg_bytes(frame)
         return send_file(buf, mimetype='image/jpeg')
@@ -700,19 +698,13 @@ def api_frame():
     """Get current camera frame as JPEG"""
     global camera
 
+    if not state['monitoring'] or camera is None or not camera.started:
+        return jsonify({'error': 'Start monitoring first'}), 400
+
     try:
         with camera_lock:
-            if not camera:
-                if not init_camera():
-                    return jsonify({'error': 'Camera initialization failed'}), 503
-
-            if not camera.started:
-                camera.start()
-                camera.set_controls(get_camera_controls())
-                time.sleep(0.5)
-
-        with camera.captured_request() as req:
-            frame = req.make_array("main")
+            with camera.captured_request() as req:
+                frame = req.make_array("main")
 
         buf = frame_to_jpeg_bytes(frame)
         return send_file(buf, mimetype='image/jpeg')
@@ -726,19 +718,13 @@ def api_frame_with_still_processing():
     """Get current frame with still post-processing applied"""
     global camera
 
+    if not state['monitoring'] or camera is None or not camera.started:
+        return jsonify({'error': 'Start monitoring first'}), 400
+
     try:
         with camera_lock:
-            if not camera:
-                if not init_camera():
-                    return jsonify({'error': 'Camera initialization failed'}), 503
-
-            if not camera.started:
-                camera.start()
-                camera.set_controls(get_camera_controls())
-                time.sleep(0.5)
-
-        with camera.captured_request() as req:
-            frame = req.make_array("main")
+            with camera.captured_request() as req:
+                frame = req.make_array("main")
 
         camera_settings = config.get('camera_settings', {})
         still_contrast = camera_settings.get('still_contrast', 1.0)
