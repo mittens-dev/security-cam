@@ -549,8 +549,6 @@ function setupCameraSettingsModal() {
     if (!openBtn || !modal || !closeBtn || !resetBtn) return;
 
     const sliders = {
-        exposure: document.getElementById('exposureSlider'),
-        gain: document.getElementById('gainSlider'),
         brightness: document.getElementById('brightnessSlider'),
         contrast: document.getElementById('contrastSlider'),
         saturation: document.getElementById('saturationSlider'),
@@ -566,8 +564,6 @@ function setupCameraSettingsModal() {
     async function loadSettings() {
         const s = await apiCall('/camera-settings', 'GET');
         if (s) {
-            sliders.exposure.value = s.exposure_time || 8000;
-            sliders.gain.value = s.analogue_gain || 1.2;
             sliders.brightness.value = s.brightness || 0;
             sliders.contrast.value = s.contrast || 1.0;
             sliders.saturation.value = s.saturation || 1.0;
@@ -579,8 +575,6 @@ function setupCameraSettingsModal() {
     }
 
     function updateValues() {
-        document.getElementById('exposureValue').textContent = sliders.exposure.value;
-        document.getElementById('gainValue').textContent = parseFloat(sliders.gain.value).toFixed(2);
         document.getElementById('brightnessValue').textContent = parseFloat(sliders.brightness.value).toFixed(1);
         document.getElementById('contrastValue').textContent = parseFloat(sliders.contrast.value).toFixed(2);
         document.getElementById('saturationValue').textContent = parseFloat(sliders.saturation.value).toFixed(2);
@@ -591,8 +585,6 @@ function setupCameraSettingsModal() {
 
     async function saveSettings() {
         await apiCall('/camera-settings', 'PUT', {
-            exposure_time: parseInt(sliders.exposure.value),
-            analogue_gain: parseFloat(sliders.gain.value),
             brightness: parseFloat(sliders.brightness.value),
             contrast: parseFloat(sliders.contrast.value),
             saturation: parseFloat(sliders.saturation.value),
@@ -627,9 +619,8 @@ function setupCameraSettingsModal() {
 
     resetBtn.addEventListener('click', async () => {
         await apiCall('/camera-settings', 'PUT', {
-            exposure_time: 8000, analogue_gain: 1.2, brightness: 0,
-            contrast: 1.0, saturation: 1.0, awb_mode: 1,
-            still_saturation: 1.0, still_contrast: 1.0
+            brightness: 0, contrast: 1.0, saturation: 1.0,
+            awb_mode: 1, still_saturation: 1.0, still_contrast: 1.0
         });
         await loadSettings();
     });

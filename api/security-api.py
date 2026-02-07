@@ -71,10 +71,16 @@ camera = None
 camera_lock = threading.Lock()
 prev_lores = None
 stop_flag = threading.Event()
+calibration_stop = threading.Event()
 monitor_thread = None
 
 LORES_SIZE = (320, 240)
 MAIN_SIZE = (1280, 720)
+
+# Auto-calibration targets
+CALIB_INTERVAL = 300        # 5 minutes between calibrations
+TARGET_LUMINANCE = 115.0    # target mean Y (0-255) — slightly below middle
+DAMPING = 0.3               # move 30% toward target per cycle
 
 
 def frame_to_image(frame):
@@ -154,16 +160,20 @@ def save_event(pixels):
 # === CAMERA ===
 
 def get_camera_controls():
-    """Build camera controls dict from config"""
+    """Build camera controls dict from config.
+    Uses hardware auto-exposure and auto-white-balance so the camera
+    automatically adapts to lighting conditions. Manual exposure/gain
+    are intentionally omitted — they conflict with AE and caused the
+    monitor to go blind when set too low.
+    """
     settings = config.get('camera_settings', {})
     return {
-        "ExposureTime": int(settings.get('exposure_time', 8000)),
-        "AnalogueGain": float(settings.get('analogue_gain', 1.2)),
+        "AeEnable": True,
+        "AwbEnable": True,
+        "AwbMode": int(settings.get('awb_mode', 1)),
         "Brightness": float(settings.get('brightness', 0)),
         "Contrast": float(settings.get('contrast', 1.0)),
         "Saturation": float(settings.get('saturation', 1.0)),
-        "AwbMode": int(settings.get('awb_mode', 1)),
-        "AeEnable": False
     }
 
 
@@ -320,10 +330,30 @@ def monitor_loop():
 
             region_mask = build_region_mask()
             cooldown_until = 0
+            last_heartbeat = time.time()
+            last_stats_log = time.time()
+            peak_pixels = 0
+            peak_max_diff = 0
+            frame_count = 0
 
             while not stop_flag.is_set():
                 try:
                     current_time = time.time()
+
+                    # Heartbeat log every 5 minutes so we know the loop is alive
+                    if current_time - last_heartbeat >= 300:
+                        print(f"[heartbeat] Monitor alive, events={len(motion_events)}", flush=True)
+                        last_heartbeat = current_time
+
+                    # Motion stats log every 30 seconds
+                    if current_time - last_stats_log >= 30:
+                        thresh = config['motion_threshold']
+                        sens = config['motion_sensitivity']
+                        print(f"[stats] frames={frame_count} peak_px={peak_pixels}/{thresh} peak_diff={peak_max_diff}/{sens} regions={'on' if region_mask is not None else 'off'}", flush=True)
+                        last_stats_log = current_time
+                        peak_pixels = 0
+                        peak_max_diff = 0
+                        frame_count = 0
 
                     # Cooldown after burst
                     if current_time < cooldown_until:
@@ -333,8 +363,12 @@ def monitor_loop():
                     # Grab lores frame for motion detection
                     lores_frame = camera.capture_array("lores")
                     motion, pixels, max_diff = detect_motion_lores(lores_frame, region_mask)
+                    frame_count += 1
+                    peak_pixels = max(peak_pixels, pixels)
+                    peak_max_diff = max(peak_max_diff, max_diff)
 
                     if motion:
+                        state['motion_detected'] = True
                         print(f"Motion: {pixels} px (max_diff={max_diff})", flush=True)
                         save_event(pixels)
 
@@ -412,12 +446,16 @@ def api_config():
         print("[API] Regions changed, restarting monitor", flush=True)
         stop_flag.set()
         if monitor_thread and monitor_thread.is_alive():
-            monitor_thread.join(timeout=5)
-        time.sleep(0.5)
+            monitor_thread.join(timeout=10)
+        # Ensure old thread is dead
+        if monitor_thread and monitor_thread.is_alive():
+            print("[API] WARNING: old monitor thread still alive", flush=True)
+        time.sleep(1)
         stop_flag.clear()
         state['monitoring'] = True
         monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
         monitor_thread.start()
+        time.sleep(1)  # Let it initialize
         print("[API] Monitor restarted with new mask", flush=True)
 
     return jsonify({'success': True, 'config': config})
@@ -677,8 +715,16 @@ def api_frame_with_still_processing():
 # === MAIN ===
 
 if __name__ == '__main__':
-    print("Security Camera API (v4 - Stills Only)", flush=True)
+    print("Security Camera API (v5 - Stills Only, Auto-Exposure)", flush=True)
     load_config()
     load_events()
     print(f"Config: {config}", flush=True)
+
+    # Auto-start monitoring on service boot
+    print("Auto-starting monitoring...", flush=True)
+    stop_flag.clear()
+    state['monitoring'] = True
+    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    monitor_thread.start()
+
     app.run(host='0.0.0.0', port=5000, threaded=True)
