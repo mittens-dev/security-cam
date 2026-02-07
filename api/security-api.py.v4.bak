@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Raspberry Pi Camera 3 Security System — Stills-Only Edition
-Uses picamera2 dual-stream:
-- main (1280x720) for still captures
-- lores (320x240) for motion detection
-No video encoding — lightweight and stable on Pi hardware.
+Raspberry Pi Camera 3 Security System
+Uses the official picamera2 patterns:
+- Dual stream: main (1280x720) + lores (320x240) for motion detection
+- Continuous H264 encoding with CircularOutput2 for zero-lag recording
+- Still capture via captured_request() without interrupting video
 """
 import sys
 import json
@@ -15,6 +15,8 @@ from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_cors import CORS
 from picamera2 import Picamera2
+from picamera2.encoders import H264Encoder
+from picamera2.outputs import CircularOutput2, PyavOutput
 import cv2
 import numpy as np
 import io
@@ -40,10 +42,9 @@ CORS(app)
 config = {
     'motion_threshold': 500,
     'motion_sensitivity': 25,
-    'capture_on_motion': True,
-    'burst_count': 5,
-    'burst_interval': 0.5,
-    'cooldown_seconds': 5,
+    'record_on_motion': True,
+    'recording_duration': 10,
+    'pre_record_seconds': 3,
     'detection_regions': [],
     'use_regions': False,
     'save_stills': True,
@@ -61,36 +62,24 @@ config = {
 
 state = {
     'monitoring': False,
-    'capturing': False,
+    'recording': False,
     'motion_detected': False,
-    'last_motion': None
+    'last_motion': None,
+    'recording_end_time': 0
 }
 
 motion_events = []
 camera = None
 camera_lock = threading.Lock()
+encoder = None
+circular = None
 prev_lores = None
 stop_flag = threading.Event()
 monitor_thread = None
 
+# Low-resolution stream size for motion detection
 LORES_SIZE = (320, 240)
 MAIN_SIZE = (1280, 720)
-
-
-def frame_to_image(frame):
-    """Convert camera frame to PIL Image.
-    picamera2 'RGB888' actually delivers BGR byte order, so swap to RGB for PIL."""
-    return Image.fromarray(frame[:, :, ::-1])
-
-
-def frame_to_jpeg_bytes(frame, quality=85):
-    """Convert camera frame to JPEG BytesIO via PIL.
-    picamera2 'RGB888' = BGR, swap to RGB for PIL."""
-    img = Image.fromarray(frame[:, :, ::-1])
-    buf = io.BytesIO()
-    img.save(buf, 'JPEG', quality=quality)
-    buf.seek(0)
-    return buf
 
 
 # === CONFIG ===
@@ -100,15 +89,7 @@ def load_config():
     try:
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE) as f:
-                saved = json.load(f)
-                # Migrate old config keys
-                if 'record_on_motion' in saved and 'capture_on_motion' not in saved:
-                    saved['capture_on_motion'] = saved.pop('record_on_motion')
-                if 'recording_duration' in saved:
-                    saved.pop('recording_duration', None)
-                if 'pre_record_seconds' in saved:
-                    saved.pop('pre_record_seconds', None)
-                config.update(saved)
+                config.update(json.load(f))
     except Exception as e:
         print(f"Config error: {e}", flush=True)
 
@@ -168,7 +149,11 @@ def get_camera_controls():
 
 
 def init_camera():
-    """Initialize camera with dual-stream config (no encoder)."""
+    """Initialize camera with dual-stream video configuration.
+
+    Main stream: 1280x720 RGB888 for recording and stills
+    Lores stream: 320x240 YUV420 for cheap motion detection
+    """
     global camera
 
     if camera is not None:
@@ -186,7 +171,7 @@ def init_camera():
             controls=get_camera_controls()
         )
         camera.configure(video_config)
-        print("Camera initialized (dual-stream, no encoder)", flush=True)
+        print("Camera initialized (dual-stream)", flush=True)
         return True
     except Exception as e:
         print(f"Camera init failed: {e}", flush=True)
@@ -194,49 +179,73 @@ def init_camera():
         return False
 
 
-def capture_burst(count=None, interval=None):
+def save_still_image(frame):
+    """Save a still JPEG from the current main stream frame"""
+    if not config.get('save_stills', True):
+        return None
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"motion_{ts}.jpg"
+    filepath = STILLS_DIR / filename
+
+    try:
+        img = Image.fromarray(frame)
+
+        camera_settings = config.get('camera_settings', {})
+        still_contrast = camera_settings.get('still_contrast', 1.0)
+        still_saturation = camera_settings.get('still_saturation', 1.0)
+
+        if still_contrast != 1.0:
+            img = ImageEnhance.Contrast(img).enhance(still_contrast)
+
+        if still_saturation != 1.0:
+            img = ImageEnhance.Color(img).enhance(still_saturation)
+
+        img.save(filepath, 'JPEG', quality=90)
+        print(f"Still saved: {filename}", flush=True)
+        return filename
+    except Exception as e:
+        print(f"Still save error: {e}", flush=True)
+        return None
+
+
+def save_burst_stills(count=3, interval=0.3):
     """Capture a burst of still images from the running camera.
-    Uses captured_request() — lightweight, no encoder needed.
+
+    Uses captured_request() which grabs frames from the main stream
+    without interrupting video encoding.
     """
     if not camera or not camera.started:
         return []
 
-    if count is None:
-        count = config.get('burst_count', 5)
-    if interval is None:
-        interval = config.get('burst_interval', 0.5)
-
     filenames = []
     ts_base = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    camera_settings = config.get('camera_settings', {})
-    still_contrast = camera_settings.get('still_contrast', 1.0)
-    still_saturation = camera_settings.get('still_saturation', 1.0)
 
     for i in range(count):
         try:
             with camera.captured_request() as req:
                 frame = req.make_array("main")
+                img = Image.fromarray(frame)
 
-                if still_contrast != 1.0 or still_saturation != 1.0:
-                    img = frame_to_image(frame)
-                    if still_contrast != 1.0:
-                        img = ImageEnhance.Contrast(img).enhance(still_contrast)
-                    if still_saturation != 1.0:
-                        img = ImageEnhance.Color(img).enhance(still_saturation)
-                else:
-                    img = frame_to_image(frame)
+                camera_settings = config.get('camera_settings', {})
+                still_contrast = camera_settings.get('still_contrast', 1.0)
+                still_saturation = camera_settings.get('still_saturation', 1.0)
+
+                if still_contrast != 1.0:
+                    img = ImageEnhance.Contrast(img).enhance(still_contrast)
+                if still_saturation != 1.0:
+                    img = ImageEnhance.Color(img).enhance(still_saturation)
 
                 filename = f"motion_{ts_base}_burst{i+1}.jpg"
                 filepath = STILLS_DIR / filename
-                img.save(str(filepath), 'JPEG', quality=90)
+                img.save(filepath, 'JPEG', quality=90)
                 filenames.append(filename)
-                print(f"Burst {i+1}/{count}: {filename}", flush=True)
+                print(f"Burst still {i+1}/{count}: {filename}", flush=True)
 
             if i < count - 1:
                 time.sleep(interval)
         except Exception as e:
-            print(f"Burst {i+1} error: {e}", flush=True)
+            print(f"Burst still {i+1} error: {e}", flush=True)
 
     return filenames
 
@@ -246,6 +255,7 @@ def build_region_mask():
     if not config.get('use_regions') or not config.get('detection_regions'):
         return None
 
+    # Scale regions from main resolution to lores resolution
     scale_x = LORES_SIZE[0] / MAIN_SIZE[0]
     scale_y = LORES_SIZE[1] / MAIN_SIZE[1]
 
@@ -261,10 +271,15 @@ def build_region_mask():
 
 
 def detect_motion_lores(lores_frame, region_mask=None):
-    """Motion detection on the low-res YUV420 Y channel."""
+    """Motion detection on the low-resolution YUV420 stream.
+
+    Much faster than processing the full 1280x720 RGB main stream.
+    Only uses the Y (luminance) channel from YUV420.
+    """
     global prev_lores
 
     w, h = LORES_SIZE
+    # YUV420: first h rows of width w are the Y (grayscale) channel
     gray = lores_frame[:h, :w]
     gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
@@ -288,14 +303,14 @@ def detect_motion_lores(lores_frame, region_mask=None):
 
 
 def monitor_loop():
-    """Main monitoring loop — stills only, no video encoding.
+    """Main monitoring loop using official picamera2 patterns.
 
-    - camera.start() with no encoder (lightweight)
-    - Motion detection on lores stream
-    - On motion: capture burst of stills
-    - Cooldown between bursts to prevent flooding
+    - Continuous H264 encoding with CircularOutput2 (pre-buffer)
+    - Motion detection on lores stream (cheap, non-blocking)
+    - Still capture via captured_request() (does not interrupt recording)
+    - When motion triggers: open_output() starts writing mp4 immediately
     """
-    global prev_lores, state
+    global prev_lores, state, encoder, circular
 
     print("Monitor loop starting...", flush=True)
     state['monitoring'] = True
@@ -309,28 +324,53 @@ def monitor_loop():
             continue
 
         try:
+            # Set up continuous H264 encoding with circular buffer
+            pre_record = config.get('pre_record_seconds', 3)
+            encoder = H264Encoder(bitrate=4000000, repeat=True)
+            circular = CircularOutput2(buffer_duration_ms=pre_record * 1000)
+
             camera.start()
             time.sleep(0.5)
+
+            # Reapply controls after start (ensures they take effect)
             camera.set_controls(get_camera_controls())
             time.sleep(0.3)
 
+            # Start the encoder - it runs continuously, buffering frames
+            camera.start_recording(encoder, circular)
+
             prev_lores = None
-            print("Monitoring active (stills-only mode)", flush=True)
+            print("Monitoring active (continuous encoding with circular buffer)", flush=True)
             retry_count = 0
 
             region_mask = build_region_mask()
+            recording = False
+            recording_end_time = 0
             cooldown_until = 0
 
             while not stop_flag.is_set():
                 try:
                     current_time = time.time()
 
-                    # Cooldown after burst
+                    # Check if a recording needs to stop
+                    if recording and current_time >= recording_end_time:
+                        try:
+                            circular.close_output()
+                            print("Recording stopped (circular output closed)", flush=True)
+                        except Exception as e:
+                            print(f"Error closing output: {e}", flush=True)
+                        recording = False
+                        state['recording'] = False
+                        state['recording_end_time'] = current_time
+                        cooldown_until = current_time + 2
+                        prev_lores = None  # Reset motion baseline
+
+                    # Cooldown after recording
                     if current_time < cooldown_until:
-                        time.sleep(0.2)
+                        time.sleep(0.1)
                         continue
 
-                    # Grab lores frame for motion detection
+                    # Grab lores frame for motion detection (very fast)
                     lores_frame = camera.capture_array("lores")
                     motion, pixels, max_diff = detect_motion_lores(lores_frame, region_mask)
 
@@ -338,18 +378,36 @@ def monitor_loop():
                         print(f"Motion: {pixels} px (max_diff={max_diff})", flush=True)
                         save_event(pixels)
 
-                        if config.get('capture_on_motion', True):
-                            state['capturing'] = True
-                            capture_burst()
-                            state['capturing'] = False
+                        if not recording and config['record_on_motion']:
+                            # Capture burst of stills immediately
+                            save_burst_stills(count=3, interval=0.2)
 
-                            cooldown = config.get('cooldown_seconds', 5)
-                            cooldown_until = time.time() + cooldown
-                            prev_lores = None  # Reset motion baseline
+                            # Start recording - includes pre-buffer footage!
+                            duration = config['recording_duration']
+                            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            filename = f"motion_{ts}.mp4"
+                            filepath = RECORDINGS_DIR / filename
+
+                            try:
+                                circular.open_output(PyavOutput(str(filepath)))
+                                recording = True
+                                recording_end_time = current_time + duration
+                                state['recording'] = True
+                                state['recording_end_time'] = recording_end_time
+                                print(f"Recording: {filename} ({duration}s + {pre_record}s pre-buffer)", flush=True)
+                            except Exception as e:
+                                print(f"Record start error: {e}", flush=True)
+
+                        elif recording:
+                            # Motion still ongoing - extend recording
+                            new_end = current_time + config['recording_duration']
+                            if new_end > recording_end_time:
+                                recording_end_time = new_end
+                                state['recording_end_time'] = recording_end_time
                     else:
                         state['motion_detected'] = False
 
-                    time.sleep(0.05)  # ~20 checks/sec
+                    time.sleep(0.05)  # ~20 checks/sec on lores is plenty
 
                 except Exception as e:
                     print(f"Frame error: {e}", flush=True)
@@ -361,17 +419,70 @@ def monitor_loop():
 
         finally:
             try:
+                if recording:
+                    circular.close_output()
+                camera.stop_recording()
+            except:
+                pass
+            try:
                 camera.stop()
             except:
                 pass
+            encoder = None
+            circular = None
 
         if not stop_flag.is_set():
             print(f"Restarting monitor (attempt {retry_count+1})", flush=True)
             time.sleep(1)
 
     state['monitoring'] = False
-    state['capturing'] = False
     print("Monitoring stopped", flush=True)
+
+
+# === MANUAL RECORDING ===
+
+def record_clip(duration):
+    """Manual recording using circular buffer"""
+    global state, circular
+
+    if state['recording']:
+        return None
+
+    if not circular:
+        print("Cannot record: monitoring not active", flush=True)
+        return None
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"manual_{ts}.mp4"
+    filepath = RECORDINGS_DIR / filename
+
+    # Capture burst of stills
+    save_burst_stills(count=3, interval=0.2)
+
+    try:
+        state['recording'] = True
+        state['recording_end_time'] = time.time() + duration
+        circular.open_output(PyavOutput(str(filepath)))
+        print(f"Manual recording: {filename}", flush=True)
+
+        def stop_after_duration():
+            time.sleep(duration)
+            try:
+                circular.close_output()
+                print(f"Manual recording saved: {filename}", flush=True)
+            except Exception as e:
+                print(f"Error stopping manual recording: {e}", flush=True)
+            finally:
+                state['recording'] = False
+                state['recording_end_time'] = time.time()
+
+        threading.Thread(target=stop_after_duration, daemon=True).start()
+        return filename
+
+    except Exception as e:
+        print(f"Manual record error: {e}", flush=True)
+        state['recording'] = False
+        return None
 
 
 # === WEB ROUTES ===
@@ -457,26 +568,26 @@ def api_stop():
     return jsonify({'success': True, 'status': state})
 
 
-@app.route('/api/snapshot', methods=['POST'])
-def api_snapshot():
-    """Manual snapshot — capture a burst of stills"""
+@app.route('/api/recording/start', methods=['POST'])
+def api_record():
     if not state['monitoring']:
         return jsonify({'success': False, 'error': 'Start monitoring first'}), 400
 
-    if state['capturing']:
-        return jsonify({'success': False, 'error': 'Already capturing'}), 400
+    if state['recording']:
+        return jsonify({'success': False, 'error': 'Already recording'}), 400
 
     data = request.get_json(silent=True) or {}
-    count = data.get('count', config.get('burst_count', 5))
+    dur = data.get('duration', config['recording_duration'])
+    result = record_clip(dur)
 
-    state['capturing'] = True
-    try:
-        filenames = capture_burst(count=count)
-        return jsonify({'success': True, 'filenames': filenames, 'status': state})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-    finally:
-        state['capturing'] = False
+    if result:
+        return jsonify({'success': True, 'status': state})
+    return jsonify({'success': False, 'error': 'Recording failed'}), 500
+
+
+@app.route('/api/recording/stop', methods=['POST'])
+def api_stop_record():
+    return jsonify({'success': True, 'status': state})
 
 
 @app.route('/api/events')
@@ -484,7 +595,6 @@ def api_events():
     return jsonify({'events': motion_events[-50:]})
 
 
-# Keep /api/recordings for any old MP4s on disk
 @app.route('/api/recordings')
 def api_recordings():
     recs = []
@@ -512,6 +622,34 @@ def api_recording(filename):
     if not fp.exists():
         return jsonify({'error': 'Not found'}), 404
     return send_from_directory(RECORDINGS_DIR, filename)
+
+
+@app.route('/api/preview', methods=['GET'])
+def api_preview():
+    """Get current camera frame for region drawing"""
+    global camera
+
+    if camera is None:
+        if not init_camera():
+            return jsonify({'error': 'Camera not available'}), 503
+
+    try:
+        if not camera.started:
+            camera.start()
+            time.sleep(0.5)
+
+        with camera.captured_request() as req:
+            frame = req.make_array("main")
+
+        img = Image.fromarray(frame)
+        buf = io.BytesIO()
+        img.save(buf, 'JPEG', quality=85)
+        buf.seek(0)
+
+        return send_file(buf, mimetype='image/jpeg')
+    except Exception as e:
+        print(f"Preview error: {e}", flush=True)
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/stills', methods=['GET'])
@@ -543,42 +681,6 @@ def api_still(filename):
     return send_from_directory(STILLS_DIR, filename)
 
 
-@app.route('/api/stills/all', methods=['DELETE'])
-def api_delete_all_stills():
-    count = 0
-    for f in STILLS_DIR.glob('*.jpg'):
-        try:
-            f.unlink()
-            count += 1
-        except:
-            pass
-    return jsonify({'success': True, 'deleted': count})
-
-
-@app.route('/api/preview', methods=['GET'])
-def api_preview():
-    """Get current camera frame for region drawing"""
-    global camera
-
-    if camera is None:
-        if not init_camera():
-            return jsonify({'error': 'Camera not available'}), 503
-
-    try:
-        if not camera.started:
-            camera.start()
-            time.sleep(0.5)
-
-        with camera.captured_request() as req:
-            frame = req.make_array("main")
-
-        buf = frame_to_jpeg_bytes(frame)
-        return send_file(buf, mimetype='image/jpeg')
-    except Exception as e:
-        print(f"Preview error: {e}", flush=True)
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/api/camera-settings', methods=['GET', 'PUT'])
 def api_camera_settings():
     global camera
@@ -608,7 +710,7 @@ def api_camera_settings():
 
 @app.route('/api/frame')
 def api_frame():
-    """Get current camera frame as JPEG"""
+    """Get current camera frame as JPEG using captured_request()"""
     global camera
 
     try:
@@ -622,10 +724,15 @@ def api_frame():
                 camera.set_controls(get_camera_controls())
                 time.sleep(0.5)
 
+        # Use captured_request - works whether encoder is running or not
         with camera.captured_request() as req:
             frame = req.make_array("main")
 
-        buf = frame_to_jpeg_bytes(frame)
+        img = Image.fromarray(frame)
+        buf = io.BytesIO()
+        img.save(buf, 'JPEG', quality=85)
+        buf.seek(0)
+
         return send_file(buf, mimetype='image/jpeg')
     except Exception as e:
         print(f"Frame error: {e}", flush=True)
@@ -634,7 +741,7 @@ def api_frame():
 
 @app.route('/api/frame-with-still-processing')
 def api_frame_with_still_processing():
-    """Get current frame with still post-processing applied"""
+    """Get current frame with still image post-processing applied"""
     global camera
 
     try:
@@ -651,22 +758,20 @@ def api_frame_with_still_processing():
         with camera.captured_request() as req:
             frame = req.make_array("main")
 
+        img = Image.fromarray(frame)
+
         camera_settings = config.get('camera_settings', {})
         still_contrast = camera_settings.get('still_contrast', 1.0)
         still_saturation = camera_settings.get('still_saturation', 1.0)
 
-        # Apply post-processing only if needed
-        if still_contrast != 1.0 or still_saturation != 1.0:
-            img = frame_to_image(frame)
-            if still_contrast != 1.0:
-                img = ImageEnhance.Contrast(img).enhance(still_contrast)
-            if still_saturation != 1.0:
-                img = ImageEnhance.Color(img).enhance(still_saturation)
-            buf = io.BytesIO()
-            img.save(buf, 'JPEG', quality=85)
-            buf.seek(0)
-        else:
-            buf = frame_to_jpeg_bytes(frame)
+        if still_contrast != 1.0:
+            img = ImageEnhance.Contrast(img).enhance(still_contrast)
+        if still_saturation != 1.0:
+            img = ImageEnhance.Color(img).enhance(still_saturation)
+
+        buf = io.BytesIO()
+        img.save(buf, 'JPEG', quality=85)
+        buf.seek(0)
 
         return send_file(buf, mimetype='image/jpeg')
     except Exception as e:
@@ -677,7 +782,7 @@ def api_frame_with_still_processing():
 # === MAIN ===
 
 if __name__ == '__main__':
-    print("Security Camera API (v4 - Stills Only)", flush=True)
+    print("Security Camera API (v3 - CircularOutput2)", flush=True)
     load_config()
     load_events()
     print(f"Config: {config}", flush=True)

@@ -1,28 +1,70 @@
 {
   "motion_threshold": 100,
   "motion_sensitivity": 50,
-  "record_on_motion": true,
-  "recording_duration": 2,
+  "capture_on_motion": true,
+  "burst_count": 5,
+  "burst_interval": 0.5,
+  "cooldown_seconds": 5,
   "detection_regions": [
     [
-      100,
-      100,
-      400,
-      400
+      875,
+      545,
+      1117,
+      684
     ],
     [
-      1069,
-      35,
-      1242,
-      248
+      380,
+      456,
+      466,
+      585
     ],
     [
-      1130,
-      444,
-      1262,
-      691
+      90,
+      488,
+      292,
+      591
+    ],
+    [
+      595,
+      478,
+      697,
+      646
+    ],
+    [
+      482,
+      491,
+      585,
+      635
+    ],
+    [
+      722,
+      516,
+      1071,
+      562
+    ],
+    [
+      305,
+      485,
+      370,
+      661
+    ],
+    [
+      720,
+      580,
+      863,
+      703
     ]
   ],
   "use_regions": true,
-  "save_stills": true
+  "save_stills": true,
+  "camera_settings": {
+    "exposure_time": 600,
+    "analogue_gain": 1,
+    "brightness": -0.4,
+    "contrast": 1.85,
+    "saturation": 0.7,
+    "awb_mode": 5,
+    "still_saturation": 1.2,
+    "still_contrast": 0.65
+  }
 }

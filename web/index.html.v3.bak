@@ -22,7 +22,8 @@
             <div class="button-row">
                 <button id="startMonitoring" class="btn btn-success">▶ Start Monitoring</button>
                 <button id="stopMonitoring" class="btn btn-danger" disabled>⏹ Stop Monitoring</button>
-                <button id="takeSnapshot" class="btn btn-primary">📸 Take Snapshot</button>
+                <button id="startRecording" class="btn btn-primary">⏺ Manual Record</button>
+                <button id="stopRecording" class="btn btn-warning" disabled>⏹ Stop Recording</button>
             </div>
         </section>
 
@@ -35,8 +36,8 @@
                     <span id="monitoringStatus" class="info-value">—</span>
                 </div>
                 <div class="info-card">
-                    <span class="info-label">Capturing:</span>
-                    <span id="capturingStatus" class="info-value">—</span>
+                    <span class="info-label">Recording:</span>
+                    <span id="recordingStatus" class="info-value">—</span>
                 </div>
                 <div class="info-card">
                     <span class="info-label">Motion Detected:</span>
@@ -52,7 +53,7 @@
         <!-- Configuration -->
         <section class="config-section">
             <h2>⚙️ Settings</h2>
-
+            
             <!-- Camera Settings -->
             <div class="camera-settings-group">
                 <h3>📷 Camera Settings</h3>
@@ -63,8 +64,8 @@
             <div class="settings-grid">
                 <div class="setting-group">
                     <label>
-                        <input type="checkbox" id="captureOnMotion" />
-                        Capture Stills on Motion
+                        <input type="checkbox" id="recordOnMotion" />
+                        Record on Motion Detection
                     </label>
                 </div>
 
@@ -79,18 +80,8 @@
                 </div>
 
                 <div class="setting-group">
-                    <label for="burstCount">Burst Count (stills per event):</label>
-                    <input type="number" id="burstCount" min="1" max="15" step="1" />
-                </div>
-
-                <div class="setting-group">
-                    <label for="burstInterval">Burst Interval (seconds):</label>
-                    <input type="number" id="burstInterval" min="0.1" max="3" step="0.1" />
-                </div>
-
-                <div class="setting-group">
-                    <label for="cooldownSeconds">Cooldown Between Bursts (seconds):</label>
-                    <input type="number" id="cooldownSeconds" min="1" max="60" step="1" />
+                    <label for="recordingDuration">Recording Duration (seconds):</label>
+                    <input type="number" id="recordingDuration" min="5" max="300" />
                 </div>
 
                 <div class="setting-group">
@@ -99,7 +90,7 @@
             </div>
         </section>
 
-        <!-- Recent Motion Events -->
+        <!-- Recent Motion Events --> -->
         <section class="events-section">
             <h2>📋 Recent Motion Events</h2>
             <div class="events-header">
@@ -111,16 +102,15 @@
             </div>
         </section>
 
-        <!-- Stills Gallery -->
-        <section class="stills-section">
-            <h2>📷 Captured Stills</h2>
-            <div class="stills-header">
-                <button id="refreshStills" class="btn btn-secondary">🔄 Refresh</button>
-                <button id="deleteAllStills" class="btn btn-danger">🗑 Delete All</button>
-                <span id="stillsCount">0 stills</span>
+        <!-- Recordings -->
+        <section class="recordings-section">
+            <h2>🎬 Recordings</h2>
+            <div class="recordings-header">
+                <button id="refreshRecordings" class="btn btn-secondary">🔄 Refresh</button>
+                <span id="recordingsCount">0 recordings</span>
             </div>
-            <div id="stillsList" class="stills-grid">
-                <p class="no-data">No stills captured</p>
+            <div id="recordingsList" class="recordings-list">
+                <p class="no-data">No recordings available</p>
             </div>
         </section>
 
@@ -139,28 +129,6 @@
         </section>
     </div>
 
-    <!-- Region Drawing Modal -->
-    <div id="regionModal" class="modal">
-        <div class="modal-content">
-            <h2>🎯 Detection Regions</h2>
-            <p>Click and drag on the image to draw detection regions. Motion will only be detected inside these zones.</p>
-            <div class="modal-body">
-                <div class="canvas-container">
-                    <canvas id="regionCanvas"></canvas>
-                </div>
-                <div class="regions-list-panel">
-                    <h3>Regions (<span id="modalRegionsCount">0</span>)</h3>
-                    <div id="regionsList"></div>
-                    <button id="deleteSelected" class="btn btn-danger btn-small" style="display:none">🗑 Delete Selected</button>
-                </div>
-            </div>
-            <div class="modal-buttons">
-                <button id="saveRegions" class="btn btn-success">✓ Save Regions</button>
-                <button id="cancelRegions" class="btn btn-secondary">✗ Cancel</button>
-            </div>
-        </div>
-    </div>
-
     <!-- Camera Settings Modal -->
     <div id="cameraModal" class="modal">
         <div class="modal-content camera-modal">
@@ -168,25 +136,31 @@
             <div class="modal-body">
                 <div class="settings-columns">
                     <div class="camera-preview-panel">
-                        <h3>Live Preview</h3>
+                        <h3>Live Preview (Raw)</h3>
                         <div class="preview-container">
-                            <img id="stillPreview" src="/api/frame-with-still-processing" alt="Camera Preview" />
+                            <img id="cameraPreview" src="/api/frame" alt="Camera Preview" />
                         </div>
-                        <p class="preview-info">Preview with current camera + post-processing settings</p>
+                        <p class="preview-info">Current video frame</p>
+                        
+                        <h3>Still Preview (With Processing)</h3>
+                        <div class="preview-container">
+                            <img id="stillPreview" src="/api/frame-with-still-processing" alt="Still Preview" />
+                        </div>
+                        <p class="preview-info">How stills will look with current settings</p>
                     </div>
                     <div class="camera-controls-panel">
                         <h3>Adjust Settings</h3>
                         <div class="camera-controls-grid">
                             <div class="control-group">
                                 <label for="exposureSlider">Exposure Time (μs):</label>
-                                <input type="range" id="exposureSlider" min="100" max="66000" step="500" />
+                                <input type="range" id="exposureSlider" min="5000" max="15000" step="500" />
                                 <span id="exposureValue">8000</span>
                             </div>
 
                             <div class="control-group">
                                 <label for="gainSlider">Analogue Gain:</label>
-                                <input type="range" id="gainSlider" min="1.0" max="16.0" step="0.1" />
-                                <span id="gainValue">1.0</span>
+                                <input type="range" id="gainSlider" min="1.12" max="8" step="0.1" />
+                                <span id="gainValue">1.2</span>
                             </div>
 
                             <div class="control-group">
@@ -197,13 +171,13 @@
 
                             <div class="control-group">
                                 <label for="contrastSlider">Contrast:</label>
-                                <input type="range" id="contrastSlider" min="0.0" max="4.0" step="0.05" />
+                                <input type="range" id="contrastSlider" min="0.5" max="3" step="0.1" />
                                 <span id="contrastValue">1.0</span>
                             </div>
 
                             <div class="control-group">
                                 <label for="saturationSlider">Saturation:</label>
-                                <input type="range" id="saturationSlider" min="0.0" max="4.0" step="0.05" />
+                                <input type="range" id="saturationSlider" min="0.5" max="3" step="0.1" />
                                 <span id="saturationValue">1.0</span>
                             </div>
 
@@ -216,13 +190,13 @@
 
                             <div class="control-group">
                                 <label for="stillSaturationSlider">Still Saturation (Post-Process):</label>
-                                <input type="range" id="stillSaturationSlider" min="0.0" max="3.0" step="0.05" />
+                                <input type="range" id="stillSaturationSlider" min="0.5" max="2" step="0.1" />
                                 <span id="stillSaturationValue">1.0</span>
                             </div>
 
                             <div class="control-group">
                                 <label for="stillContrastSlider">Still Contrast (Post-Process):</label>
-                                <input type="range" id="stillContrastSlider" min="0.0" max="3.0" step="0.05" />
+                                <input type="range" id="stillContrastSlider" min="0.5" max="2" step="0.1" />
                                 <span id="stillContrastValue">1.0</span>
                             </div>
                         </div>
@@ -232,22 +206,6 @@
             <div class="modal-buttons">
                 <button id="resetCameraSettings" class="btn btn-warning">↻ Reset to Default</button>
                 <button id="closeCameraSettings" class="btn btn-secondary">✓ Close</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Still Lightbox -->
-    <div id="stillLightbox" class="lightbox" style="display:none">
-        <div class="lightbox-overlay" id="lightboxClose"></div>
-        <div class="lightbox-content">
-            <img id="lightboxImage" src="" alt="Still" />
-            <div class="lightbox-info">
-                <span id="lightboxFilename"></span>
-                <div class="lightbox-actions">
-                    <a id="lightboxDownload" href="" download class="btn btn-primary btn-small">⬇ Download</a>
-                    <button id="lightboxDelete" class="btn btn-danger btn-small">🗑 Delete</button>
-                    <button id="lightboxCloseBtn" class="btn btn-secondary btn-small">✗ Close</button>
-                </div>
             </div>
         </div>
     </div>
