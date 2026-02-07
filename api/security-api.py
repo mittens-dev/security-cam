@@ -50,8 +50,8 @@ config = {
     'camera_settings': {
         'exposure_time': 8000,
         'analogue_gain': 1.2,
-        'brightness': 0,
-        'contrast': 1.0,
+        'brightness': 0.15,
+        'contrast': 1.3,
         'saturation': 1.0,
         'awb_mode': 1,
         'still_saturation': 1.0,

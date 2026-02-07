@@ -545,8 +545,22 @@ function setupCameraSettingsModal() {
     const modal = document.getElementById('cameraModal');
     const closeBtn = document.getElementById('closeCameraSettings');
     const resetBtn = document.getElementById('resetCameraSettings');
+    const revertBtn = document.getElementById('revertCameraSettings');
 
-    if (!openBtn || !modal || !closeBtn || !resetBtn) return;
+    console.log('setupCameraSettingsModal - Elements found:', {
+        openBtn: !!openBtn,
+        modal: !!modal,
+        closeBtn: !!closeBtn,
+        resetBtn: !!resetBtn,
+        revertBtn: !!revertBtn
+    });
+
+    if (!openBtn || !modal || !closeBtn || !resetBtn || !revertBtn) {
+        console.error('setupCameraSettingsModal: Missing required elements', {
+            openBtn, modal, closeBtn, resetBtn, revertBtn
+        });
+        return;
+    }
 
     const sliders = {
         brightness: document.getElementById('brightnessSlider'),
@@ -560,17 +574,48 @@ function setupCameraSettingsModal() {
     if (Object.values(sliders).some(s => !s)) return;
 
     const awbModes = ['Off', 'Auto', 'Tungsten', 'Fluorescent', 'Indoor', 'Daylight', 'Cloudy', 'Custom'];
+    
+    // Track settings from when modal was opened (for revert)
+    let modalOpenState = {};
 
     async function loadSettings() {
-        const s = await apiCall('/camera-settings', 'GET');
-        if (s) {
-            sliders.brightness.value = s.brightness || 0;
-            sliders.contrast.value = s.contrast || 1.0;
-            sliders.saturation.value = s.saturation || 1.0;
-            sliders.awb.value = s.awb_mode || 1;
-            sliders.stillSat.value = s.still_saturation || 1.0;
-            sliders.stillCon.value = s.still_contrast || 1.0;
-            updateValues();
+        console.log('loadSettings() called');
+        try {
+            const s = await apiCall('/camera-settings', 'GET');
+            console.log('Got settings:', s);
+            if (s) {
+                // Set values immediately
+                sliders.brightness.value = s.brightness || 0.15;
+                sliders.contrast.value = s.contrast || 1.3;
+                sliders.saturation.value = s.saturation || 1.0;
+                sliders.awb.value = s.awb_mode || 1;
+                sliders.stillSat.value = s.still_saturation || 1.0;
+                sliders.stillCon.value = s.still_contrast || 1.0;
+                
+                // Force DOM update in next frame
+                await new Promise(resolve => requestAnimationFrame(resolve));
+                
+                // Manually update visual slider positions by resetting them
+                [sliders.brightness, sliders.contrast, sliders.saturation, 
+                 sliders.awb, sliders.stillSat, sliders.stillCon].forEach(slider => {
+                    const val = slider.value;
+                    slider.value = '';
+                    slider.value = val;
+                });
+                
+                console.log('Slider values set:', {
+                    brightness: sliders.brightness.value,
+                    contrast: sliders.contrast.value,
+                    brightnessActual: s.brightness,
+                    contrastActual: s.contrast
+                });
+                
+                updateValues();
+                console.log('Settings loaded and display updated');
+            }
+        } catch (e) {
+            console.error('Error in loadSettings:', e);
+            throw e;
         }
     }
 
@@ -592,14 +637,29 @@ function setupCameraSettingsModal() {
             still_saturation: parseFloat(sliders.stillSat.value),
             still_contrast: parseFloat(sliders.stillCon.value)
         });
+        // Update last saved state
+        lastSavedState = {
+            brightness: parseFloat(sliders.brightness.value),
+            contrast: parseFloat(sliders.contrast.value),
+            saturation: parseFloat(sliders.saturation.value),
+            awb_mode: parseInt(sliders.awb.value),
+            still_saturation: parseFloat(sliders.stillSat.value),
+            still_contrast: parseFloat(sliders.stillCon.value)
+        };
     }
 
     function startPreview() {
+        console.log('startPreview() called');
         stopPreview();
         const stillPreview = document.getElementById('stillPreview');
+        if (!stillPreview) {
+            console.error('stillPreview element not found');
+            return;
+        }
         cameraSettingsPreviewInterval = setInterval(() => {
             stillPreview.src = `/api/frame-with-still-processing?t=${Date.now()}`;
         }, 1000);
+        console.log('Preview started');
     }
 
     function stopPreview() {
@@ -611,18 +671,66 @@ function setupCameraSettingsModal() {
 
     openBtn.addEventListener('click', async () => {
         await loadSettings();
+        // Store current settings as "modal open" state for revert
+        modalOpenState = {
+            brightness: parseFloat(sliders.brightness.value),
+            contrast: parseFloat(sliders.contrast.value),
+            saturation: parseFloat(sliders.saturation.value),
+            awb_mode: parseInt(sliders.awb.value),
+            still_saturation: parseFloat(sliders.stillSat.value),
+            still_contrast: parseFloat(sliders.stillCon.value)
+        };
+        console.log('Modal opened, saved state:', modalOpenState);
         modal.style.display = 'flex';
         startPreview();
     });
 
     closeBtn.addEventListener('click', () => { stopPreview(); modal.style.display = 'none'; });
 
-    resetBtn.addEventListener('click', async () => {
-        await apiCall('/camera-settings', 'PUT', {
-            brightness: 0, contrast: 1.0, saturation: 1.0,
-            awb_mode: 1, still_saturation: 1.0, still_contrast: 1.0
-        });
-        await loadSettings();
+    revertBtn.addEventListener('click', async () => {
+        console.log('Revert button clicked, restoring to:', modalOpenState);
+        try {
+            // Restore sliders to modal open state
+            sliders.brightness.value = modalOpenState.brightness;
+            sliders.contrast.value = modalOpenState.contrast;
+            sliders.saturation.value = modalOpenState.saturation;
+            sliders.awb.value = modalOpenState.awb_mode;
+            sliders.stillSat.value = modalOpenState.still_saturation;
+            sliders.stillCon.value = modalOpenState.still_contrast;
+            
+            // Force visual update
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            [sliders.brightness, sliders.contrast, sliders.saturation, 
+             sliders.awb, sliders.stillSat, sliders.stillCon].forEach(slider => {
+                const val = slider.value;
+                slider.value = '';
+                slider.value = val;
+            });
+            
+            updateValues();
+            
+            // Save the reverted settings back to API
+            await saveSettings();
+            
+            startPreview();
+            console.log('Revert complete - showing alert');
+            showAlert('✓ Reverted to settings from when modal opened', 'success');
+        } catch (e) {
+            console.error('Error in revert:', e);
+            showAlert('Error reverting settings: ' + e.message, 'error');
+        }
+    });
+
+    resetBtn.addEventListener('click', () => {
+        if (confirm('Are you sure? This will restore all camera settings to defaults.\n\nThis action cannot be easily undone.')) {
+            apiCall('/camera-settings', 'PUT', {
+                brightness: 0.15, contrast: 1.3, saturation: 1.0,
+                awb_mode: 1, still_saturation: 1.0, still_contrast: 1.0
+            }).then(async () => {
+                await loadSettings();
+                showAlert('Restored to default settings', 'info');
+            });
+        }
     });
 
     Object.values(sliders).forEach(slider => {
@@ -655,6 +763,13 @@ function setupLightbox() {
             }
         });
     }
+
+    // Close lightbox with Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && lightbox.style.display === 'flex') {
+            closeLightbox();
+        }
+    });
 }
 
 // ==================== EVENT LISTENERS ====================
