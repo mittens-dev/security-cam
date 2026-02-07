@@ -712,6 +712,102 @@ def api_frame_with_still_processing():
         return jsonify({'error': str(e)}), 500
 
 
+# === AUTO-CALIBRATION ===
+
+def measure_luminance(frame):
+    """Measure mean luminance from a camera frame (BGR from picamera2).
+    Convert to YCrCb and take the mean of the Y channel."""
+    ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+    return float(ycrcb[:, :, 0].mean())
+
+
+def auto_calibration_loop():
+    """Periodically measure scene brightness and adjust ISP Brightness/Contrast.
+
+    Strategy:
+    - Measure mean luminance (Y channel, 0-255)
+    - If scene is bright (Y > target): reduce Brightness toward 0, Contrast toward 1.0
+    - If scene is dark (Y < target): increase Brightness (max 0.5), Contrast (max 2.0)
+    - Move only 30% toward target each cycle (dampening) to avoid jumps
+    - Runs every 5 minutes
+    """
+    print("[calibration] Auto-calibration thread started", flush=True)
+
+    # Wait for camera to be ready
+    while not calibration_stop.is_set():
+        if camera and camera.started:
+            break
+        calibration_stop.wait(2)
+
+    # Initial delay to let AE settle
+    calibration_stop.wait(10)
+
+    while not calibration_stop.is_set():
+        try:
+            if not camera or not camera.started:
+                calibration_stop.wait(10)
+                continue
+
+            # Grab a frame
+            with camera.captured_request() as req:
+                frame = req.make_array("main")
+
+            lum = measure_luminance(frame)
+
+            settings = config.get('camera_settings', {})
+            cur_brightness = float(settings.get('brightness', 0))
+            cur_contrast = float(settings.get('contrast', 1.0))
+
+            # Compute desired Brightness based on luminance
+            # Map luminance to brightness offset:
+            #   lum=255 (very bright) -> brightness = -0.3 (darken)
+            #   lum=TARGET (ideal)    -> brightness = 0.0
+            #   lum=30 (very dark)    -> brightness = 0.5 (brighten)
+            lum_error = (TARGET_LUMINANCE - lum) / 255.0  # -0.5 to +0.5 range
+            target_brightness = max(-0.5, min(0.5, lum_error * 2.0))
+
+            # Compute desired Contrast:
+            #   Bright scenes: reduce contrast toward 1.0 (already well-lit)
+            #   Dark scenes: boost contrast toward 1.8 (helps visibility)
+            if lum > TARGET_LUMINANCE:
+                target_contrast = 1.0
+            else:
+                # Scale up contrast as it gets darker, max 2.0
+                dark_ratio = max(0, (TARGET_LUMINANCE - lum) / TARGET_LUMINANCE)
+                target_contrast = 1.0 + dark_ratio * 1.0  # up to 2.0
+
+            # Dampen: move only 30% toward target
+            new_brightness = cur_brightness + DAMPING * (target_brightness - cur_brightness)
+            new_contrast = cur_contrast + DAMPING * (target_contrast - cur_contrast)
+
+            # Round for cleanliness
+            new_brightness = round(new_brightness, 2)
+            new_contrast = round(max(0.5, min(3.0, new_contrast)), 2)
+
+            # Only apply if meaningfully changed
+            if abs(new_brightness - cur_brightness) > 0.01 or abs(new_contrast - cur_contrast) > 0.01:
+                settings['brightness'] = new_brightness
+                settings['contrast'] = new_contrast
+                config['camera_settings'] = settings
+                save_config()
+
+                try:
+                    camera.set_controls(get_camera_controls())
+                except Exception as e:
+                    print(f"[calibration] Failed to apply controls: {e}", flush=True)
+
+                print(f"[calibration] lum={lum:.0f} brightness={cur_brightness:.2f}->{new_brightness:.2f} contrast={cur_contrast:.2f}->{new_contrast:.2f}", flush=True)
+            else:
+                print(f"[calibration] lum={lum:.0f} — no change needed (brightness={cur_brightness:.2f} contrast={cur_contrast:.2f})", flush=True)
+
+        except Exception as e:
+            print(f"[calibration] Error: {e}", flush=True)
+
+        calibration_stop.wait(CALIB_INTERVAL)
+
+    print("[calibration] Auto-calibration thread stopped", flush=True)
+
+
 # === MAIN ===
 
 if __name__ == '__main__':
@@ -723,8 +819,13 @@ if __name__ == '__main__':
     # Auto-start monitoring on service boot
     print("Auto-starting monitoring...", flush=True)
     stop_flag.clear()
+    calibration_stop.clear()
     state['monitoring'] = True
     monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
     monitor_thread.start()
+
+    # Start auto-calibration for brightness/contrast
+    calib_thread = threading.Thread(target=auto_calibration_loop, daemon=True)
+    calib_thread.start()
 
     app.run(host='0.0.0.0', port=5000, threaded=True)
