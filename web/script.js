@@ -547,129 +547,53 @@ function updateRegionsList() {
 
 let cameraSettingsPreviewInterval = null;
 
+const NR_MODES = ['Off', 'Minimal', 'Standard', 'High Quality'];
+
 function setupCameraSettingsModal() {
     const openBtn = document.getElementById('openCameraSettings');
     const modal = document.getElementById('cameraModal');
     const closeBtn = document.getElementById('closeCameraSettings');
-    const resetBtn = document.getElementById('resetCameraSettings');
-    const revertBtn = document.getElementById('revertCameraSettings');
     const calibrateBtn = document.getElementById('calibrateNow');
+    const forceDayBtn = document.getElementById('forceDay');
+    const forceDuskBtn = document.getElementById('forceDusk');
+    const forceNightBtn = document.getElementById('forceNight');
 
-    console.log('setupCameraSettingsModal - Elements found:', {
-        openBtn: !!openBtn,
-        modal: !!modal,
-        closeBtn: !!closeBtn,
-        resetBtn: !!resetBtn,
-        revertBtn: !!revertBtn,
-        calibrateBtn: !!calibrateBtn
-    });
-
-    if (!openBtn || !modal || !closeBtn || !resetBtn || !revertBtn || !calibrateBtn) {
-        console.error('setupCameraSettingsModal: Missing required elements', {
-            openBtn, modal, closeBtn, resetBtn, revertBtn, calibrateBtn
-        });
+    if (!openBtn || !modal || !closeBtn || !calibrateBtn) {
+        console.error('setupCameraSettingsModal: Missing required elements');
         return;
     }
 
-    const sliders = {
-        brightness: document.getElementById('brightnessSlider'),
-        contrast: document.getElementById('contrastSlider'),
-        saturation: document.getElementById('saturationSlider'),
-        awb: document.getElementById('awbModeSlider'),
-        stillSat: document.getElementById('stillSaturationSlider'),
-        stillCon: document.getElementById('stillContrastSlider')
-    };
-
-    if (Object.values(sliders).some(s => !s)) return;
-
-    const awbModes = ['Off', 'Auto', 'Tungsten', 'Fluorescent', 'Indoor', 'Daylight', 'Cloudy', 'Custom'];
-    
-    // Track settings from when modal was opened (for revert)
-    let modalOpenState = {};
-
-    async function loadSettings() {
-        console.log('loadSettings() called');
+    async function loadProfileInfo() {
         try {
-            const s = await apiCall('/camera-settings', 'GET');
-            console.log('Got settings:', s);
-            if (s) {
-                // Set values immediately
-                sliders.brightness.value = s.brightness || 0.15;
-                sliders.contrast.value = s.contrast || 1.3;
-                sliders.saturation.value = s.saturation || 1.0;
-                sliders.awb.value = s.awb_mode || 1;
-                sliders.stillSat.value = s.still_saturation || 1.0;
-                sliders.stillCon.value = s.still_contrast || 1.0;
-                
-                // Force DOM update in next frame
-                await new Promise(resolve => requestAnimationFrame(resolve));
-                
-                // Manually update visual slider positions by resetting them
-                [sliders.brightness, sliders.contrast, sliders.saturation, 
-                 sliders.awb, sliders.stillSat, sliders.stillCon].forEach(slider => {
-                    const val = slider.value;
-                    slider.value = '';
-                    slider.value = val;
-                });
-                
-                console.log('Slider values set:', {
-                    brightness: sliders.brightness.value,
-                    contrast: sliders.contrast.value,
-                    brightnessActual: s.brightness,
-                    contrastActual: s.contrast
-                });
-                
-                updateValues();
-                console.log('Settings loaded and display updated');
+            const data = await apiCall('/camera-settings', 'GET');
+            const profileName = document.getElementById('activeProfileName');
+            if (profileName) {
+                const name = data.active_profile || 'Detecting...';
+                profileName.textContent = name;
+                profileName.className = 'profile-badge profile-' + (data.active_profile || '').toLowerCase();
+            }
+            if (data.current_controls) {
+                const c = data.current_controls;
+                const el = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+                el('profileBrightness', c.Brightness?.toFixed(1) ?? '—');
+                el('profileContrast', c.Contrast?.toFixed(2) ?? '—');
+                el('profileSaturation', c.Saturation?.toFixed(2) ?? '—');
+                el('profileSharpness', c.Sharpness?.toFixed(1) ?? '—');
+                el('profileNR', NR_MODES[c.NoiseReductionMode] || '—');
             }
         } catch (e) {
-            console.error('Error in loadSettings:', e);
-            throw e;
+            console.error('Error loading profile info:', e);
         }
-    }
-
-    function updateValues() {
-        document.getElementById('brightnessValue').textContent = parseFloat(sliders.brightness.value).toFixed(1);
-        document.getElementById('contrastValue').textContent = parseFloat(sliders.contrast.value).toFixed(2);
-        document.getElementById('saturationValue').textContent = parseFloat(sliders.saturation.value).toFixed(2);
-        document.getElementById('awbModeValue').textContent = awbModes[parseInt(sliders.awb.value)] || 'Unknown';
-        document.getElementById('stillSaturationValue').textContent = parseFloat(sliders.stillSat.value).toFixed(2);
-        document.getElementById('stillContrastValue').textContent = parseFloat(sliders.stillCon.value).toFixed(2);
-    }
-
-    async function saveSettings() {
-        await apiCall('/camera-settings', 'PUT', {
-            brightness: parseFloat(sliders.brightness.value),
-            contrast: parseFloat(sliders.contrast.value),
-            saturation: parseFloat(sliders.saturation.value),
-            awb_mode: parseInt(sliders.awb.value),
-            still_saturation: parseFloat(sliders.stillSat.value),
-            still_contrast: parseFloat(sliders.stillCon.value)
-        });
-        // Update last saved state
-        lastSavedState = {
-            brightness: parseFloat(sliders.brightness.value),
-            contrast: parseFloat(sliders.contrast.value),
-            saturation: parseFloat(sliders.saturation.value),
-            awb_mode: parseInt(sliders.awb.value),
-            still_saturation: parseFloat(sliders.stillSat.value),
-            still_contrast: parseFloat(sliders.stillCon.value)
-        };
     }
 
     function startPreview() {
-        console.log('startPreview() called');
         stopPreview();
         const stillPreview = document.getElementById('stillPreview');
-        if (!stillPreview) {
-            console.error('stillPreview element not found');
-            return;
-        }
-        // At 12MP resolution, frame processing takes 3-5 seconds
+        if (!stillPreview) return;
+        // Refresh preview every 2 seconds (using cached frame, no lock contention)
         cameraSettingsPreviewInterval = setInterval(() => {
-            stillPreview.src = `/api/frame-with-still-processing?t=${Date.now()}`;
-        }, 4000);  // Refresh every 4 seconds instead of 1
-        console.log('Preview started (4s refresh for 12MP)');
+            stillPreview.src = `/api/frame?t=${Date.now()}`;
+        }, 2000);
     }
 
     function stopPreview() {
@@ -680,76 +604,22 @@ function setupCameraSettingsModal() {
     }
 
     openBtn.addEventListener('click', async () => {
-        await loadSettings();
-        // Store current settings as "modal open" state for revert
-        modalOpenState = {
-            brightness: parseFloat(sliders.brightness.value),
-            contrast: parseFloat(sliders.contrast.value),
-            saturation: parseFloat(sliders.saturation.value),
-            awb_mode: parseInt(sliders.awb.value),
-            still_saturation: parseFloat(sliders.stillSat.value),
-            still_contrast: parseFloat(sliders.stillCon.value)
-        };
-        console.log('Modal opened, saved state:', modalOpenState);
+        await loadProfileInfo();
         modal.style.display = 'flex';
         startPreview();
     });
 
     closeBtn.addEventListener('click', () => { stopPreview(); modal.style.display = 'none'; });
 
-    revertBtn.addEventListener('click', async () => {
-        console.log('Revert button clicked, restoring to:', modalOpenState);
-        try {
-            // Restore sliders to modal open state
-            sliders.brightness.value = modalOpenState.brightness;
-            sliders.contrast.value = modalOpenState.contrast;
-            sliders.saturation.value = modalOpenState.saturation;
-            sliders.awb.value = modalOpenState.awb_mode;
-            sliders.stillSat.value = modalOpenState.still_saturation;
-            sliders.stillCon.value = modalOpenState.still_contrast;
-            
-            // Force visual update
-            await new Promise(resolve => requestAnimationFrame(resolve));
-            [sliders.brightness, sliders.contrast, sliders.saturation, 
-             sliders.awb, sliders.stillSat, sliders.stillCon].forEach(slider => {
-                const val = slider.value;
-                slider.value = '';
-                slider.value = val;
-            });
-            
-            updateValues();
-            
-            // Save the reverted settings back to API
-            await saveSettings();
-            
-            startPreview();
-            console.log('Revert complete - showing alert');
-            showAlert('✓ Reverted to settings from when modal opened', 'success');
-        } catch (e) {
-            console.error('Error in revert:', e);
-            showAlert('Error reverting settings: ' + e.message, 'error');
-        }
-    });
-
-    resetBtn.addEventListener('click', () => {
-        if (confirm('Are you sure? This will restore all camera settings to defaults.\n\nThis action cannot be easily undone.')) {
-            apiCall('/camera-settings', 'PUT', {
-                brightness: 0.15, contrast: 1.3, saturation: 1.0,
-                awb_mode: 1, still_saturation: 1.0, still_contrast: 1.0
-            }).then(async () => {
-                await loadSettings();
-                showAlert('Restored to default settings', 'info');
-            });
-        }
-    });
-
     calibrateBtn.addEventListener('click', async () => {
         calibrateBtn.disabled = true;
-        calibrateBtn.textContent = '⚙ Calibrating...';
+        calibrateBtn.textContent = '⚙ Recalibrating...';
         try {
             const result = await fetch('/api/calibrate', { method: 'POST' });
             if (result.ok) {
-                showAlert('✓ Calibration triggered (check logs)', 'success');
+                showAlert('✓ Calibration triggered', 'success');
+                // Refresh profile info after a short delay
+                setTimeout(loadProfileInfo, 2000);
             } else {
                 showAlert('Failed to trigger calibration', 'error');
             }
@@ -757,13 +627,31 @@ function setupCameraSettingsModal() {
             showAlert('Error: ' + e.message, 'error');
         } finally {
             calibrateBtn.disabled = false;
-            calibrateBtn.textContent = '⚙ Calibrate Now';
+            calibrateBtn.textContent = '⚙ Recalibrate Now';
         }
     });
 
-    Object.values(sliders).forEach(slider => {
-        slider.addEventListener('input', () => { updateValues(); saveSettings(); });
-    });
+    async function forceProfile(profileName) {
+        try {
+            const result = await fetch('/api/calibrate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force_profile: profileName })
+            });
+            if (result.ok) {
+                showAlert(`Forced profile: ${profileName}`, 'success');
+                await loadProfileInfo();
+            } else {
+                showAlert('Failed to force profile', 'error');
+            }
+        } catch (e) {
+            showAlert('Error: ' + e.message, 'error');
+        }
+    }
+
+    if (forceDayBtn) forceDayBtn.addEventListener('click', () => forceProfile('DAY'));
+    if (forceDuskBtn) forceDuskBtn.addEventListener('click', () => forceProfile('DUSK'));
+    if (forceNightBtn) forceNightBtn.addEventListener('click', () => forceProfile('NIGHT'));
 
     modal.addEventListener('click', (e) => {
         if (e.target === modal) { stopPreview(); modal.style.display = 'none'; }

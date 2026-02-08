@@ -1,0 +1,219 @@
+On Pi Camera Module 3 (IMX708):
+
+Green everywhere usually means the ISP is applying a colour correction twice or with a mismatched colour space.
+
+And your code confirms that risk.
+
+Red flags in your setup 🚩
+1️⃣ You are measuring luminance from processed RGB
+frame = req.make_array("main")
+cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+
+
+But:
+
+main is already ISP-processed
+
+colour gains, CCM, AWB, contrast are already baked in
+
+you then adjust controls based on post-ISP output
+
+That creates a feedback loop, which almost always biases green.
+
+Why green?
+
+green channel dominates luminance
+
+AE + contrast boosts push green hardest
+
+AWB fights a moving target
+
+2️⃣ You disabled AWB but kept ColourGains
+"AwbEnable": false,
+"ColourGains": [1.55, 1.35]
+
+
+When AWB is off:
+
+gains are applied
+
+but the Colour Correction Matrix (CCM) may still be active
+
+CCM is tuned for AWB-on behaviour
+
+That mismatch = green cast everywhere.
+
+This is a known libcamera trap.
+
+3️⃣ You are doing some post-processing (even if “light”)
+
+Even this:
+
+ImageEnhance.Contrast(img)
+ImageEnhance.Color(img)
+
+
+operates in sRGB gamma space, not linear light.
+
+That again:
+
+amplifies green
+
+crushes red/blue in shadows
+
+You already suspected this — your instinct is correct.
+
+The correct fix (do this in order)
+✅ Step 1 — Remove all post-processing
+
+Temporarily kill this entire block:
+
+still_contrast
+still_saturation
+ImageEnhance
+
+
+Your preview endpoint should do only:
+
+buf = frame_to_jpeg_bytes(frame)
+
+
+No PIL. No enhancement. No colour math.
+
+We need a clean baseline.
+
+✅ Step 2 — Let the ISP own colour (seriously)
+
+For DAY + DUSK:
+
+camera.set_controls({
+    "AeEnable": True,
+    "AwbEnable": True,
+    "AwbMode": libcamera.controls.AwbModeEnum.Auto,
+    "Brightness": 0.0,
+    "Contrast": 1.0,
+    "Saturation": 1.0,
+    "Sharpness": 1.0,
+    "NoiseReductionMode": 2,
+})
+
+
+No ColourGains at all.
+
+If it’s still green after this, then we know it’s deeper.
+
+✅ Step 3 — Explicitly clear stale colour state
+
+This is the big one most people miss.
+
+When switching profiles, do this once:
+
+camera.set_controls({
+    "AwbEnable": True,
+    "ColourGains": None,
+    "ColourCorrectionMatrix": None,
+})
+
+
+Yes, None is valid here.
+
+This forces libcamera to:
+
+discard cached CCM
+
+re-derive colour pipeline
+
+Without this, green tint can persist across restarts.
+
+Why this happens on IMX708 specifically
+
+Camera Module 3:
+
+has a very aggressive green channel
+
+tuned for phone-like pipelines
+
+expects AWB + CCM to work together
+
+Once you:
+
+disable AWB
+
+keep CCM
+
+tweak contrast
+
+sample processed RGB
+
+…the pipeline drifts green and never recovers.
+
+One more important question (don’t skip this)
+
+When you capture frames, which stream are you using?
+
+req.make_array("main")
+
+
+If your main stream is:
+
+resized
+
+format-converted
+
+or shared with preview
+
+then colour quality is worse.
+
+For calibration & analysis, you want:
+
+req.make_array("lores")   # for motion/luminance
+req.make_array("main")    # only for final capture
+
+
+If you want, I can show you how to:
+
+classify day/dusk using lores
+
+leave main untouched and pristine
+
+That alone often fixes colour weirdness.
+
+Quick sanity test (2 minutes)
+
+Run this once, no UI, no profiles:
+
+camera.set_controls({
+    "AeEnable": True,
+    "AwbEnable": True,
+    "AwbMode": libcamera.controls.AwbModeEnum.Auto,
+    "Brightness": 0.0,
+    "Contrast": 1.0,
+    "Saturation": 1.0,
+    "Sharpness": 1.0,
+})
+
+
+Capture a JPEG.
+
+If it’s still green:
+➡️ we look at sensor orientation / IR filter / lens
+
+If it’s neutral:
+➡️ the issue is 100% pipeline logic (fixable)
+
+Bottom line
+
+You’re not fighting “bad colours”.
+
+You’re fighting:
+
+feedback from processed RGB
+
+stale colour matrices
+
+AWB/gain mismatch
+
+gamma-space post-processing
+
+All solvable.
+You’re actually very close to a pro-grade pipeline.

@@ -537,6 +537,105 @@ section {
 .control-group input[type="range"] { width: 100%; cursor: pointer; }
 .control-group span { font-size: 12px; color: #667eea; font-weight: 600; }
 
+/* Profile status display */
+.profile-status {
+    background: #f7fafc;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 10px;
+}
+
+.profile-current {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.profile-badge {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.profile-badge.profile-day {
+    background: #fefcbf;
+    color: #975a16;
+    border: 2px solid #ecc94b;
+}
+
+.profile-badge.profile-dusk {
+    background: #fed7e2;
+    color: #97266d;
+    border: 2px solid #ed64a6;
+}
+
+.profile-badge.profile-night {
+    background: #c3dafe;
+    color: #2a4365;
+    border: 2px solid #667eea;
+}
+
+.profile-details {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.profile-detail-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+}
+
+.profile-detail-row .detail-label {
+    color: #718096;
+}
+
+.profile-detail-row .detail-value {
+    font-weight: 600;
+    color: #2d3748;
+}
+
+.profile-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.btn-profile {
+    flex: 1;
+    padding: 8px 12px;
+    border: 2px solid #e2e8f0;
+    background: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.btn-profile:hover {
+    border-color: #667eea;
+    background: #ebf4ff;
+}
+
+.btn-info {
+    background: #4299e1;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.btn-info:hover { background: #3182ce; }
+.btn-info:disabled { background: #a0aec0; cursor: not-allowed; }
+
 .camera-settings-group {
     margin-bottom: 20px;
     padding: 15px;

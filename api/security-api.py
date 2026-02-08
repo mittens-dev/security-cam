@@ -47,24 +47,21 @@ config = {
     'detection_regions': [],
     'use_regions': False,
     'save_stills': True,
-    'camera_settings': {
-        'exposure_time': 8000,
-        'analogue_gain': 1.2,
-        'brightness': 0.15,
-        'contrast': 1.3,
-        'saturation': 1.0,
-        'awb_mode': 1,
-        'still_saturation': 1.0,
-        'still_contrast': 1.0
-    }
+    'camera_settings': {}
 }
 
 state = {
     'monitoring': False,
     'capturing': False,
     'motion_detected': False,
-    'last_motion': None
+    'last_motion': None,
+    'active_profile': None
 }
+
+# Frame cache for preview (avoids camera lock contention)
+_cached_frame = None
+_cached_frame_time = 0
+FRAME_CACHE_TTL = 0.5  # seconds — serve cached frame if < 500ms old
 
 motion_events = []
 camera = None
@@ -82,19 +79,43 @@ LORES_SIZE = (320, 240)
 MAIN_SIZE = (2304, 1296)  # 3MP resolution
 # MAIN_SIZE = (4608, 2592)
 
-# Auto-calibration targets
-# AUTO-CALIBRATION TUNING
-# Adjust these to control how the system adapts brightness/contrast
+# === CAMERA PROFILES (applied automatically based on scene luminance) ===
+CAMERA_PROFILES = {
+    "DAY": {
+        "AeEnable": True,
+        "AwbEnable": True,             # Let ISP handle white balance in day
+        # No ColourGains here — allow libcamera to manage colour pipeline
+        "Brightness": 0.0,
+        "Contrast": 1.0,
+        "Saturation": 1.0,
+        "Sharpness": 1.0,
+        "NoiseReductionMode": 2,
+    },
+    "DUSK": {
+        "AeEnable": True,
+        "AwbEnable": True,
+        "Brightness": 0.0,
+        "Contrast": 1.0,
+        "Saturation": 1.0,
+        "Sharpness": 1.0,
+        "NoiseReductionMode": 2,
+    },
+    "NIGHT": {
+        "AeEnable": True,
+        "AwbEnable": True,             # Keep AWB on initially to avoid CCM mismatch
+        "Brightness": 0.0,
+        "Contrast": 1.0,
+        "Saturation": 0.9,             # reduce chroma noise
+        "Sharpness": 0.8,
+        "NoiseReductionMode": 3,
+    }
+}
 
-# How bright should daytime images be? (0-255 scale)
-# 100 = dim/safe for night | 120 = balanced | 140 = bright/punchy for daytime
-AUTO_BRIGHTNESS_TARGET = 155.0
+# Scene classification thresholds (luminance 0-255)
+DAY_THRESHOLD = 140     # Above this = DAY profile
+DUSK_THRESHOLD = 90     # Above this = DUSK, below = NIGHT
 
-# How fast to adapt? (0.0 = never, 1.0 = instant change per cycle)
-# 0.2 = slow/smooth | 0.4 = moderate | 0.6 = fast/responsive
-CALIBRATION_SPEED = 0.4
-
-# How often to check and adjust? (in seconds)
+# How often to check scene and switch profiles (in seconds)
 CALIBRATION_INTERVAL_SECONDS = 300  # Every 5 minutes
 
 
@@ -110,6 +131,32 @@ def frame_to_jpeg_bytes(frame, quality=85):
     img = Image.fromarray(frame[:, :, ::-1])
     buf = io.BytesIO()
     img.save(buf, 'JPEG', quality=quality)
+    buf.seek(0)
+    return buf
+
+
+def _get_cached_frame():
+    """Return a JPEG BytesIO of the current camera frame, using a cache
+    to avoid hammering the camera lock on rapid preview/UI requests.
+    Cache TTL is FRAME_CACHE_TTL seconds (default 0.5s).
+    """
+    global _cached_frame, _cached_frame_time
+
+    now = time.time()
+    if _cached_frame and (now - _cached_frame_time) < FRAME_CACHE_TTL:
+        # Serve cached copy
+        buf = io.BytesIO(_cached_frame)
+        buf.seek(0)
+        return buf
+
+    # Capture fresh frame
+    with camera_lock:
+        with camera.captured_request() as req:
+            frame = req.make_array("main")
+
+    buf = frame_to_jpeg_bytes(frame)
+    _cached_frame = buf.getvalue()
+    _cached_frame_time = now
     buf.seek(0)
     return buf
 
@@ -175,21 +222,10 @@ def save_event(pixels):
 # === CAMERA ===
 
 def get_camera_controls():
-    """Build camera controls dict from config.
-    Uses hardware auto-exposure and auto-white-balance so the camera
-    automatically adapts to lighting conditions. Manual exposure/gain
-    are intentionally omitted — they conflict with AE and caused the
-    monitor to go blind when set too low.
+    """Get controls for camera init — uses DAY profile as default.
+    Actual runtime controls are managed by the profile-based calibration loop.
     """
-    settings = config.get('camera_settings', {})
-    return {
-        "AeEnable": True,
-        "AwbEnable": True,
-        "AwbMode": int(settings.get('awb_mode', 1)),
-        "Brightness": float(settings.get('brightness', 0)),
-        "Contrast": float(settings.get('contrast', 1.0)),
-        "Saturation": float(settings.get('saturation', 1.0)),
-    }
+    return CAMERA_PROFILES["DAY"]
 
 
 def init_camera():
@@ -256,9 +292,11 @@ def archive_old_stills():
 
 def capture_burst(count=None, interval=None):
     """Capture a burst of still images from the running camera.
-    Uses captured_request() — lightweight, no encoder needed.
+    Uses capture_array("main") - non-blocking and safe for concurrent use.
+    Includes extra logging for diagnostics when captures fail or are skipped.
     """
     if not camera or not camera.started:
+        print("[capture_burst] Camera not started or unavailable", flush=True)
         return []
 
     if count is None:
@@ -266,39 +304,31 @@ def capture_burst(count=None, interval=None):
     if interval is None:
         interval = config.get('burst_interval', 0.5)
 
+    print(f"[capture_burst] start count={count} interval={interval}", flush=True)
+
     filenames = []
     ts_base = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    camera_settings = config.get('camera_settings', {})
-    still_contrast = camera_settings.get('still_contrast', 1.0)
-    still_saturation = camera_settings.get('still_saturation', 1.0)
-
     for i in range(count):
         try:
-            with camera.captured_request() as req:
-                frame = req.make_array("main")
+            print(f"[capture_burst] capturing frame {i+1}/{count}", flush=True)
+            # capture_array is non-blocking and thread-safe
+            frame = camera.capture_array("main")
+            img = frame_to_image(frame)
 
-                if still_contrast != 1.0 or still_saturation != 1.0:
-                    img = frame_to_image(frame)
-                    if still_contrast != 1.0:
-                        img = ImageEnhance.Contrast(img).enhance(still_contrast)
-                    if still_saturation != 1.0:
-                        img = ImageEnhance.Color(img).enhance(still_saturation)
-                else:
-                    img = frame_to_image(frame)
-
-                # Save to root stills folder; archive_old_stills() will move to dated folders
-                filename = f"motion_{ts_base}_burst{i+1}.jpg"
-                filepath = STILLS_DIR / filename
-                img.save(str(filepath), 'JPEG', quality=90)
-                filenames.append(filename)
-                print(f"Burst {i+1}/{count}: {filename}", flush=True)
+            # Save pure ISP output — no post-processing
+            filename = f"motion_{ts_base}_burst{i+1}.jpg"
+            filepath = STILLS_DIR / filename
+            img.save(str(filepath), 'JPEG', quality=90)
+            filenames.append(filename)
+            print(f"[capture_burst] Burst {i+1}/{count}: {filename}", flush=True)
 
             if i < count - 1:
                 time.sleep(interval)
         except Exception as e:
-            print(f"Burst {i+1} error: {e}", flush=True)
+            print(f"[capture_burst] Burst {i+1} error: {e}", flush=True)
 
+    print(f"[capture_burst] done, saved {len(filenames)} files", flush=True)
     return filenames
 
 
@@ -425,8 +455,7 @@ def monitor_loop():
 
                         if config.get('capture_on_motion', True):
                             state['capturing'] = True
-                            with camera_lock:
-                                capture_burst()
+                            capture_burst()  # capture_burst handles its own camera_lock
                             state['capturing'] = False
 
                             cooldown = config.get('cooldown_seconds', 5)
@@ -561,8 +590,7 @@ def api_snapshot():
 
     state['capturing'] = True
     try:
-        with camera_lock:
-            filenames = capture_burst(count=count)
+        filenames = capture_burst(count=count)
         return jsonify({'success': True, 'filenames': filenames, 'status': state})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -663,111 +691,75 @@ def api_archive():
 
 @app.route('/api/preview', methods=['GET'])
 def api_preview():
-    """Get current camera frame for region drawing"""
+    """Get current camera frame for region drawing (uses frame cache)"""
     global camera
 
     if not state['monitoring'] or camera is None or not camera.started:
         return jsonify({'error': 'Start monitoring first'}), 400
 
     try:
-        with camera_lock:
-            with camera.captured_request() as req:
-                frame = req.make_array("main")
-
-        buf = frame_to_jpeg_bytes(frame)
+        buf = _get_cached_frame()
         return send_file(buf, mimetype='image/jpeg')
     except Exception as e:
         print(f"Preview error: {e}", flush=True)
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/camera-settings', methods=['GET', 'PUT'])
+@app.route('/api/camera-settings', methods=['GET'])
 def api_camera_settings():
-    global camera
-
-    if request.method == 'GET':
-        return jsonify(config.get('camera_settings', {}))
-
-    data = request.get_json(silent=True) or {}
-
-    if 'camera_settings' not in config:
-        config['camera_settings'] = {}
-
-    config['camera_settings'].update(data)
-    save_config()
-
-    # Apply to running camera
-    if camera and camera.started:
-        try:
-            camera.set_controls(get_camera_controls())
-            print(f"Camera settings applied: {data}", flush=True)
-        except Exception as e:
-            print(f"Error applying camera settings: {e}", flush=True)
-            return jsonify({'error': str(e)}), 500
-
-    return jsonify({'success': True, 'camera_settings': config.get('camera_settings', {})})
+    """Return current active profile info (read-only — profiles manage controls)"""
+    active = state.get('active_profile', None)
+    profile_data = CAMERA_PROFILES.get(active, {}) if active else {}
+    return jsonify({
+        'active_profile': active,
+        'profiles': list(CAMERA_PROFILES.keys()),
+        'thresholds': {'day': DAY_THRESHOLD, 'dusk': DUSK_THRESHOLD},
+        'current_controls': profile_data
+    })
 
 
 @app.route('/api/calibrate', methods=['POST'])
 def api_calibrate():
-    """Force immediate auto-calibration (brightness/contrast adjustment)"""
+    """Force immediate profile re-evaluation"""
+    data = request.get_json(silent=True) or {}
+    force_profile = data.get('force_profile')  # Optional: force a specific profile
+
+    if force_profile and force_profile in CAMERA_PROFILES:
+        # Directly apply a forced profile
+        try:
+            camera.set_controls(CAMERA_PROFILES[force_profile])
+            state['active_profile'] = force_profile
+            print(f"[calibration] Forced profile -> {force_profile}", flush=True)
+            return jsonify({'success': True, 'profile': force_profile, 'forced': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
     calibration_trigger.set()
     return jsonify({'success': True, 'message': 'Calibration triggered'})
 
 
+# ---- Debug endpoints (temporary) ----
+@app.route('/api/debug/clear-capturing', methods=['POST'])
+def api_debug_clear_capturing():
+    """Debug: clear the capturing flag in case it's stuck. Returns new status."""
+    state['capturing'] = False
+    print('[debug] clearing state["capturing"] flag', flush=True)
+    return jsonify({'success': True, 'capturing': state['capturing']})
+
+
 @app.route('/api/frame')
 def api_frame():
-    """Get current camera frame as JPEG"""
+    """Get current camera frame as JPEG (pure ISP output, cached)"""
     global camera
 
     if not state['monitoring'] or camera is None or not camera.started:
         return jsonify({'error': 'Start monitoring first'}), 400
 
     try:
-        with camera_lock:
-            with camera.captured_request() as req:
-                frame = req.make_array("main")
-
-        buf = frame_to_jpeg_bytes(frame)
+        buf = _get_cached_frame()
         return send_file(buf, mimetype='image/jpeg')
     except Exception as e:
         print(f"Frame error: {e}", flush=True)
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/frame-with-still-processing')
-def api_frame_with_still_processing():
-    """Get current frame with still post-processing applied"""
-    global camera
-
-    if not state['monitoring'] or camera is None or not camera.started:
-        return jsonify({'error': 'Start monitoring first'}), 400
-
-    try:
-        with camera_lock:
-            with camera.captured_request() as req:
-                frame = req.make_array("main")
-
-        camera_settings = config.get('camera_settings', {})
-        still_contrast = camera_settings.get('still_contrast', 1.0)
-        still_saturation = camera_settings.get('still_saturation', 1.0)
-
-        # Apply post-processing only if needed
-        if still_contrast != 1.0 or still_saturation != 1.0:
-            img = frame_to_image(frame)
-            if still_contrast != 1.0:
-                img = ImageEnhance.Contrast(img).enhance(still_contrast)
-            if still_saturation != 1.0:
-                img = ImageEnhance.Color(img).enhance(still_saturation)
-            buf = io.BytesIO()
-            img.save(buf, 'JPEG', quality=85)
-            buf.seek(0)
-        else:
-            buf = frame_to_jpeg_bytes(frame)
-
-        return send_file(buf, mimetype='image/jpeg')
-    except Exception as e:
-        print(f"Frame processing error: {e}", flush=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -775,22 +767,37 @@ def api_frame_with_still_processing():
 
 def measure_luminance(frame):
     """Measure mean luminance from a camera frame (BGR from picamera2).
-    Convert to YCrCb and take the mean of the Y channel."""
+    Convert to YCrCb and take the mean of the Y channel.
+
+    Note: keep for main-frame diagnostics but do NOT use this for profile
+    classification — the frame is ISP-processed and can bias AWB/CCM feedback.
+    """
     ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
     return float(ycrcb[:, :, 0].mean())
 
 
+def measure_luminance_lores(lores_frame):
+    """Measure mean luminance (Y) from a lores YUV420 frame.
+
+    Use the Y channel directly to avoid ISP/CCM/colour feedback loops.
+    """
+    h, w = LORES_SIZE[1], LORES_SIZE[0]
+    # lores_frame Y plane is in the top 'h' rows and left 'w' columns
+    y_plane = lores_frame[:h, :w]
+    return float(y_plane.mean())
+
+
 def auto_calibration_loop():
-    """Periodically measure scene brightness and adjust ISP Brightness/Contrast.
+    """Profile-based auto-calibration.
 
     Strategy:
     - Measure mean luminance (Y channel, 0-255)
-    - If scene is bright (Y > target): reduce Brightness toward 0, Contrast toward 1.0
-    - If scene is dark (Y < target): increase Brightness (max 0.5), Contrast (max 2.0)
-    - Move only 30% toward target each cycle (dampening) to avoid jumps
-    - Runs every 5 minutes
+    - Classify scene as DAY / DUSK / NIGHT based on thresholds
+    - Apply the matching camera profile (controls are preset, not computed)
+    - Only switch when the profile actually changes
+    - Runs every 5 minutes, or immediately via /api/calibrate
     """
-    print("[calibration] Auto-calibration thread started", flush=True)
+    print("[calibration] Profile-based auto-calibration started", flush=True)
 
     # Wait for camera to be ready
     while not calibration_stop.is_set():
@@ -798,8 +805,10 @@ def auto_calibration_loop():
             break
         calibration_stop.wait(2)
 
-    # Initial delay to let AE settle
+    # Let AE settle
     calibration_stop.wait(10)
+
+    active_profile = None
 
     while not calibration_stop.is_set():
         try:
@@ -807,67 +816,60 @@ def auto_calibration_loop():
                 calibration_stop.wait(10)
                 continue
 
-            # Grab a frame
-            with camera.captured_request() as req:
-                frame = req.make_array("main")
+            # Capture one lores frame and measure Y channel to avoid ISP feedback
+            # Use capture_array (non-blocking, safe for concurrent use)
+            lores = camera.capture_array("lores")
+            lum = measure_luminance_lores(lores)
 
-            lum = measure_luminance(frame)
-
-            settings = config.get('camera_settings', {})
-            cur_brightness = float(settings.get('brightness', 0))
-            cur_contrast = float(settings.get('contrast', 1.0))
-
-            # Compute desired Brightness based on luminance
-            # Map luminance to brightness offset:
-            #   lum=255 (very bright) -> brightness = -0.3 (darken)
-            #   lum=TARGET (ideal)    -> brightness = 0.0
-            #   lum=30 (very dark)    -> brightness = 0.5 (brighten)
-            lum_error = (AUTO_BRIGHTNESS_TARGET - lum) / 255.0  # -0.5 to +0.5 range
-            target_brightness = max(-0.5, min(0.5, lum_error * 3.0))
-
-            # Compute desired Contrast:
-            #   Bright scenes: reduce contrast toward 1.0 (already well-lit)
-            #   Dark scenes: boost contrast toward 1.8 (helps visibility)
-            if lum > AUTO_BRIGHTNESS_TARGET:
-                target_contrast = 1.0
+            # Classify scene based on lores luminance
+            if lum >= DAY_THRESHOLD:
+                profile_name = "DAY"
+            elif lum >= DUSK_THRESHOLD:
+                profile_name = "DUSK"
             else:
-                # Scale up contrast as it gets darker, max 2.0
-                dark_ratio = max(0, (AUTO_BRIGHTNESS_TARGET - lum) / AUTO_BRIGHTNESS_TARGET)
-                target_contrast = 1.0 + dark_ratio * 1.0  # up to 2.0
+                profile_name = "NIGHT"
 
-            # Apply calibration speed: adjust toward targets at configured speed
-            new_brightness = cur_brightness + CALIBRATION_SPEED * (target_brightness - cur_brightness)
-            new_contrast = cur_contrast + CALIBRATION_SPEED * (target_contrast - cur_contrast)
+            # Only apply if profile changed
+            if profile_name != active_profile:
+                profile = CAMERA_PROFILES[profile_name]
 
-            # Round for cleanliness
-            new_brightness = round(new_brightness, 2)
-            new_contrast = round(max(0.5, min(3.0, new_contrast)), 2)
-
-            # Only apply if meaningfully changed
-            if abs(new_brightness - cur_brightness) > 0.01 or abs(new_contrast - cur_contrast) > 0.01:
-                settings['brightness'] = new_brightness
-                settings['contrast'] = new_contrast
-                config['camera_settings'] = settings
-                save_config()
+                print(
+                    f"[calibration] Switching profile -> {profile_name} (lum={lum:.0f})",
+                    flush=True
+                )
 
                 try:
-                    camera.set_controls(get_camera_controls())
+                    # Apply controls under lock to avoid stepping on capture burst
+                    with camera_lock:
+                        camera.set_controls({"AwbEnable": True})
+                    # Small pause to let ISP re-evaluate (outside lock to avoid blocking captures)
+                    time.sleep(0.2)
+                    with camera_lock:
+                        camera.set_controls(profile)
+                    active_profile = profile_name
+                    state['active_profile'] = profile_name
                 except Exception as e:
-                    print(f"[calibration] Failed to apply controls: {e}", flush=True)
-
-                print(f"[calibration] lum={lum:.0f} brightness={cur_brightness:.2f}->{new_brightness:.2f} contrast={cur_contrast:.2f}->{new_contrast:.2f}", flush=True)
+                    print(f"[calibration] Failed to apply profile: {e}", flush=True)
             else:
-                print(f"[calibration] lum={lum:.0f} — no change needed (brightness={cur_brightness:.2f} contrast={cur_contrast:.2f})", flush=True)
+                print(
+                    f"[calibration] Profile {active_profile} stable (lum={lum:.0f})",
+                    flush=True
+                )
 
         except Exception as e:
             print(f"[calibration] Error: {e}", flush=True)
 
-        # Check if forced calibration was requested, otherwise wait normally
-        if calibration_trigger.is_set():
-            calibration_trigger.clear()
-            print("[calibration] Forced calibration triggered", flush=True)
-        else:
-            calibration_stop.wait(CALIBRATION_INTERVAL_SECONDS)
+        # Wait or allow forced trigger
+        elapsed = 0
+        while elapsed < CALIBRATION_INTERVAL_SECONDS:
+            if calibration_trigger.is_set():
+                calibration_trigger.clear()
+                print("[calibration] Forced calibration triggered", flush=True)
+                break
+            if calibration_stop.is_set():
+                break
+            calibration_stop.wait(1)
+            elapsed += 1
 
     print("[calibration] Auto-calibration thread stopped", flush=True)
 
