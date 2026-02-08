@@ -38,6 +38,10 @@ const elements = {
     clearRegions: document.getElementById('clearRegions'),
     useRegions: document.getElementById('useRegions'),
     regionsCount: document.getElementById('regionsCount'),
+    drawCalibrationRegions: document.getElementById('drawCalibrationRegions'),
+    clearCalibrationRegions: document.getElementById('clearCalibrationRegions'),
+    useCalibrationRegions: document.getElementById('useCalibrationRegions'),
+    calibrationRegionsCount: document.getElementById('calibrationRegionsCount'),
     regionModal: document.getElementById('regionModal'),
     regionCanvas: document.getElementById('regionCanvas'),
     saveRegions: document.getElementById('saveRegions'),
@@ -124,6 +128,10 @@ function updateConfigDisplay(cfg) {
     // Update regions count on main page
     const regionCount = cfg.detection_regions?.length || 0;
     elements.regionsCount.textContent = `${regionCount} region${regionCount !== 1 ? 's' : ''} defined`;
+    
+    // Update calibration regions count on main page
+    const calCount = cfg.calibration_regions?.length || 0;
+    elements.calibrationRegionsCount.textContent = `${calCount} region${calCount !== 1 ? 's' : ''} defined`;
 }
 
 function displayEvents(events) {
@@ -321,7 +329,9 @@ function showAlert(message, type = 'success') {
 // ==================== REGION DRAWING ====================
 
 let regionDrawing = {
-    regions: [],
+    mode: 'detection', // 'detection' or 'calibration'
+    detectionRegions: [],
+    calibrationRegions: [],
     currentRegion: null,
     isDrawing: false,
     imageLoaded: false,
@@ -330,8 +340,25 @@ let regionDrawing = {
     selectedRegion: null
 };
 
-async function openRegionDrawing() {
+function getActiveRegions() {
+    return regionDrawing.mode === 'detection' 
+        ? regionDrawing.detectionRegions 
+        : regionDrawing.calibrationRegions;
+}
+
+function setActiveRegions(regions) {
+    if (regionDrawing.mode === 'detection') {
+        regionDrawing.detectionRegions = regions;
+    } else {
+        regionDrawing.calibrationRegions = regions;
+    }
+}
+
+async function openRegionDrawing(mode = 'detection') {
     try {
+        regionDrawing.mode = mode;
+        updateModalMode();
+
         const response = await fetch(`${API_BASE}/preview`);
         if (!response.ok) throw new Error('Failed to fetch preview');
 
@@ -357,7 +384,8 @@ async function openRegionDrawing() {
 
             ctx.drawImage(img, 0, 0, width, height);
             regionDrawing.imageLoaded = true;
-            regionDrawing.regions = [...(state.config.detection_regions || [])];
+            regionDrawing.detectionRegions = [...(state.config.detection_regions || [])];
+            regionDrawing.calibrationRegions = [...(state.config.calibration_regions || [])];
             regionDrawing.selectedRegion = null;
             updateRegionsList();
             drawRegions();
@@ -371,6 +399,25 @@ async function openRegionDrawing() {
     }
 }
 
+function updateModalMode() {
+    const title = document.getElementById('regionModalTitle');
+    const desc = document.getElementById('regionModalDesc');
+    const btnDetection = document.getElementById('btnDetectionMode');
+    const btnCalibration = document.getElementById('btnCalibrationMode');
+
+    if (regionDrawing.mode === 'detection') {
+        title.textContent = '🎯 Detection Regions';
+        desc.textContent = 'Click and drag on the image to draw detection regions. Motion will only be detected inside these zones.';
+        btnDetection.classList.add('active');
+        btnCalibration.classList.remove('active');
+    } else {
+        title.textContent = '🔆 Calibration Regions';
+        desc.textContent = 'Draw regions to INCLUDE in brightness measurement. Areas outside (like sky) will be excluded from auto-exposure calibration.';
+        btnDetection.classList.remove('active');
+        btnCalibration.classList.add('active');
+    }
+}
+
 function drawRegions() {
     if (!regionDrawing.imageLoaded || !regionDrawing.baseImage) return;
 
@@ -380,7 +427,12 @@ function drawRegions() {
 
     ctx.drawImage(regionDrawing.baseImage, 0, 0, canvas.width, canvas.height);
 
-    regionDrawing.regions.forEach((region, idx) => {
+    const regions = getActiveRegions();
+    const isCalibration = regionDrawing.mode === 'calibration';
+    const normalColor = isCalibration ? '#00aaff' : '#00ff00'; // Blue for calibration, green for detection
+    const normalFill = isCalibration ? 'rgba(0, 170, 255, 0.15)' : 'rgba(0, 255, 0, 0.15)';
+
+    regions.forEach((region, idx) => {
         const [x1, y1, x2, y2] = region;
         const x = x1 * scale, y = y1 * scale;
         const w = (x2 - x1) * scale, h = (y2 - y1) * scale;
@@ -389,19 +441,19 @@ function drawRegions() {
             ctx.strokeStyle = '#ff0000'; ctx.lineWidth = 4;
             ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
         } else {
-            ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 3;
-            ctx.fillStyle = 'rgba(0, 255, 0, 0.15)';
+            ctx.strokeStyle = normalColor; ctx.lineWidth = 3;
+            ctx.fillStyle = normalFill;
         }
 
         ctx.fillRect(x, y, w, h);
         ctx.strokeRect(x, y, w, h);
-        ctx.fillStyle = idx === regionDrawing.selectedRegion ? '#ff0000' : '#00ff00';
+        ctx.fillStyle = idx === regionDrawing.selectedRegion ? '#ff0000' : normalColor;
         ctx.font = 'bold 20px sans-serif';
         ctx.fillText(`#${idx + 1}`, x + 5, y + 25);
     });
 
     if (regionDrawing.currentRegion) {
-        ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 2;
+        ctx.strokeStyle = normalColor; ctx.lineWidth = 2;
         ctx.setLineDash([5, 5]);
         const { startX, startY, endX, endY } = regionDrawing.currentRegion;
         ctx.strokeRect(startX, startY, endX - startX, endY - startY);
@@ -443,7 +495,7 @@ function setupRegionDrawing() {
         const y2 = Math.floor(Math.max(startY, endY) / scale);
 
         if (Math.abs(x2 - x1) > 5 && Math.abs(y2 - y1) > 5) {
-            regionDrawing.regions.push([x1, y1, x2, y2]);
+            getActiveRegions().push([x1, y1, x2, y2]);
             updateRegionsCount();
             updateRegionsList();
         }
@@ -455,17 +507,25 @@ function setupRegionDrawing() {
 async function saveRegionsToConfig() {
     try {
         const cfg = {
-            detection_regions: regionDrawing.regions,
-            use_regions: elements.useRegions.checked
+            detection_regions: regionDrawing.detectionRegions,
+            use_regions: elements.useRegions.checked,
+            calibration_regions: regionDrawing.calibrationRegions,
+            use_calibration_regions: elements.useCalibrationRegions.checked
         };
         const response = await apiCall('/config', 'PUT', cfg);
         if (response) {
-            state.config.detection_regions = regionDrawing.regions;
+            state.config.detection_regions = regionDrawing.detectionRegions;
             state.config.use_regions = elements.useRegions.checked;
-            // Update regions count on main page
-            const regionCount = regionDrawing.regions.length;
-            elements.regionsCount.textContent = `${regionCount} region${regionCount !== 1 ? 's' : ''} defined`;
-            showAlert('Detection regions saved!', 'success');
+            state.config.calibration_regions = regionDrawing.calibrationRegions;
+            state.config.use_calibration_regions = elements.useCalibrationRegions.checked;
+            
+            // Update counts on main page
+            const detCount = regionDrawing.detectionRegions.length;
+            elements.regionsCount.textContent = `${detCount} region${detCount !== 1 ? 's' : ''} defined`;
+            const calCount = regionDrawing.calibrationRegions.length;
+            elements.calibrationRegionsCount.textContent = `${calCount} region${calCount !== 1 ? 's' : ''} defined`;
+            
+            showAlert('Regions saved!', 'success');
             closeRegionModal();
         }
     } catch (e) { console.error(e); }
@@ -479,8 +539,9 @@ function closeRegionModal() {
 }
 
 function clearAllRegions() {
-    if (confirm('Clear all detection regions?')) {
-        regionDrawing.regions = [];
+    const mode = regionDrawing.mode === 'detection' ? 'detection' : 'calibration';
+    if (confirm(`Clear all ${mode} regions?`)) {
+        setActiveRegions([]);
         regionDrawing.selectedRegion = null;
         updateRegionsCount();
         updateRegionsList();
@@ -490,7 +551,9 @@ function clearAllRegions() {
 
 function deleteSelectedRegion() {
     if (regionDrawing.selectedRegion !== null) {
-        regionDrawing.regions.splice(regionDrawing.selectedRegion, 1);
+        const regions = getActiveRegions();
+        regions.splice(regionDrawing.selectedRegion, 1);
+        setActiveRegions(regions);
         regionDrawing.selectedRegion = null;
         updateRegionsCount();
         updateRegionsList();
@@ -499,25 +562,31 @@ function deleteSelectedRegion() {
 }
 
 function updateRegionsCount() {
-    const count = regionDrawing.regions.length;
-    elements.regionsCount.textContent = `${count} region${count !== 1 ? 's' : ''} defined`;
+    if (regionDrawing.mode === 'detection') {
+        const count = regionDrawing.detectionRegions.length;
+        elements.regionsCount.textContent = `${count} region${count !== 1 ? 's' : ''} defined`;
+    } else {
+        const count = regionDrawing.calibrationRegions.length;
+        elements.calibrationRegionsCount.textContent = `${count} region${count !== 1 ? 's' : ''} defined`;
+    }
 }
 
 function updateRegionsList() {
     const list = document.getElementById('regionsList');
     const modalCount = document.getElementById('modalRegionsCount');
     const deleteBtn = document.getElementById('deleteSelected');
+    const regions = getActiveRegions();
 
-    modalCount.textContent = regionDrawing.regions.length;
+    modalCount.textContent = regions.length;
     list.innerHTML = '';
 
-    if (regionDrawing.regions.length === 0) {
+    if (regions.length === 0) {
         list.innerHTML = '<p class="no-regions">No regions defined</p>';
         deleteBtn.style.display = 'none';
         return;
     }
 
-    regionDrawing.regions.forEach((region, idx) => {
+    regions.forEach((region, idx) => {
         const [x1, y1, x2, y2] = region;
         const div = document.createElement('div');
         div.className = 'region-item';
@@ -542,6 +611,7 @@ function updateRegionsList() {
     });
     deleteBtn.style.display = regionDrawing.selectedRegion !== null ? 'block' : 'none';
 }
+
 
 // ==================== CAMERA SETTINGS ====================
 
@@ -583,6 +653,19 @@ function setupCameraSettingsModal() {
                 el('profileSharpness', c.Sharpness?.toFixed(1) ?? '—');
                 el('profileNR', NR_MODES[c.NoiseReductionMode] || '—');
             }
+            // Display luminance and thresholds
+            const el = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+            if (data.luminance !== null && data.luminance !== undefined) {
+                el('sceneLuminance', data.luminance.toFixed(1));
+            } else {
+                el('sceneLuminance', '—');
+            }
+            if (data.thresholds) {
+                el('thresholdDayBright', data.thresholds.day_bright?.toFixed(0) ?? '—');
+                el('thresholdDay', data.thresholds.day?.toFixed(0) ?? '—');
+                el('thresholdDuskBright', data.thresholds.dusk_bright?.toFixed(0) ?? '—');
+                el('thresholdDuskDark', data.thresholds.dusk_dark?.toFixed(0) ?? '—');
+            }
         } catch (e) {
             console.error('Error loading profile info:', e);
         }
@@ -595,6 +678,7 @@ function setupCameraSettingsModal() {
         // Refresh preview every 2 seconds (using cached frame, no lock contention)
         cameraSettingsPreviewInterval = setInterval(() => {
             stillPreview.src = `/api/frame?t=${Date.now()}`;
+            loadProfileInfo(); // Also refresh luminance and profile info
         }, 2000);
     }
 
@@ -695,18 +779,45 @@ function setupLightbox() {
 // ==================== EVENT LISTENERS ====================
 
 function setupEventListeners() {
-    if (elements.drawRegions) elements.drawRegions.addEventListener('click', openRegionDrawing);
+    if (elements.drawRegions) elements.drawRegions.addEventListener('click', () => openRegionDrawing('detection'));
     if (elements.clearRegions) elements.clearRegions.addEventListener('click', clearAllRegions);
+    if (elements.drawCalibrationRegions) elements.drawCalibrationRegions.addEventListener('click', () => openRegionDrawing('calibration'));
+    if (elements.clearCalibrationRegions) elements.clearCalibrationRegions.addEventListener('click', clearAllRegions);
     if (elements.saveRegions) elements.saveRegions.addEventListener('click', saveRegionsToConfig);
     if (elements.cancelRegions) elements.cancelRegions.addEventListener('click', closeRegionModal);
 
     const deleteSelectedBtn = document.getElementById('deleteSelected');
     if (deleteSelectedBtn) deleteSelectedBtn.addEventListener('click', deleteSelectedRegion);
 
+    // Mode toggle buttons in modal
+    const btnDetection = document.getElementById('btnDetectionMode');
+    const btnCalibration = document.getElementById('btnCalibrationMode');
+    if (btnDetection) btnDetection.addEventListener('click', () => {
+        regionDrawing.mode = 'detection';
+        regionDrawing.selectedRegion = null;
+        updateModalMode();
+        updateRegionsList();
+        drawRegions();
+    });
+    if (btnCalibration) btnCalibration.addEventListener('click', () => {
+        regionDrawing.mode = 'calibration';
+        regionDrawing.selectedRegion = null;
+        updateModalMode();
+        updateRegionsList();
+        drawRegions();
+    });
+
     if (elements.useRegions) {
         elements.useRegions.addEventListener('change', async () => {
             await apiCall('/config', 'PUT', { use_regions: elements.useRegions.checked });
             state.config.use_regions = elements.useRegions.checked;
+        });
+    }
+
+    if (elements.useCalibrationRegions) {
+        elements.useCalibrationRegions.addEventListener('change', async () => {
+            await apiCall('/config', 'PUT', { use_calibration_regions: elements.useCalibrationRegions.checked });
+            state.config.use_calibration_regions = elements.useCalibrationRegions.checked;
         });
     }
 
@@ -727,11 +838,20 @@ async function initialize() {
     await loadStills();
 
     if (state.config.detection_regions) {
-        regionDrawing.regions = state.config.detection_regions;
-        updateRegionsCount();
+        regionDrawing.detectionRegions = state.config.detection_regions;
+        const count = regionDrawing.detectionRegions.length;
+        elements.regionsCount.textContent = `${count} region${count !== 1 ? 's' : ''} defined`;
+    }
+    if (state.config.calibration_regions) {
+        regionDrawing.calibrationRegions = state.config.calibration_regions;
+        const count = regionDrawing.calibrationRegions.length;
+        elements.calibrationRegionsCount.textContent = `${count} region${count !== 1 ? 's' : ''} defined`;
     }
     if (state.config.use_regions !== undefined) {
         elements.useRegions.checked = state.config.use_regions;
+    }
+    if (state.config.use_calibration_regions !== undefined) {
+        elements.useCalibrationRegions.checked = state.config.use_calibration_regions;
     }
 
     // Auto-refresh

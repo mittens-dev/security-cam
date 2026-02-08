@@ -32,6 +32,33 @@
     ]
   ],
   "use_regions": true,
+  "calibration_regions": [
+    [
+      18,
+      890,
+      2295,
+      1287
+    ],
+    [
+      1894,
+      642,
+      2292,
+      876
+    ],
+    [
+      24,
+      24,
+      400,
+      619
+    ],
+    [
+      1610,
+      792,
+      1800,
+      882
+    ]
+  ],
+  "use_calibration_regions": true,
   "save_stills": true,
   "camera_settings": {
     "analogue_gain": 1,

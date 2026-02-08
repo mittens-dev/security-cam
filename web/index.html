@@ -137,13 +137,32 @@
                 <span id="regionsCount">0 regions defined</span>
             </div>
         </section>
+
+        <!-- Calibration Regions -->
+        <section class="regions-section">
+            <h2>🔆 Calibration Regions</h2>
+            <div class="regions-controls">
+                <button id="drawCalibrationRegions" class="btn btn-info">✏️ Draw Calibration Zones</button>
+                <button id="clearCalibrationRegions" class="btn btn-danger">🗑 Clear All Zones</button>
+                <label>
+                    <input type="checkbox" id="useCalibrationRegions" />
+                    Use Calibration Regions
+                </label>
+                <span id="calibrationRegionsCount">0 regions defined</span>
+            </div>
+            <p class="info-text" style="margin-top: 0.5rem; color: #a0aec0; font-size: 0.9rem;">Calibration regions exclude areas (like sky) from brightness measurements for better auto-exposure.</p>
+        </section>
     </div>
 
     <!-- Region Drawing Modal -->
     <div id="regionModal" class="modal">
         <div class="modal-content">
-            <h2>🎯 Detection Regions</h2>
-            <p>Click and drag on the image to draw detection regions. Motion will only be detected inside these zones.</p>
+            <h2 id="regionModalTitle">🎯 Detection Regions</h2>
+            <p id="regionModalDesc">Click and drag on the image to draw detection regions. Motion will only be detected inside these zones.</p>
+            <div class="region-mode-toggle">
+                <button id="btnDetectionMode" class="mode-btn active">🎯 Motion Detection</button>
+                <button id="btnCalibrationMode" class="mode-btn">🔆 Auto-Calibration</button>
+            </div>
             <div class="modal-body">
                 <div class="canvas-container">
                     <canvas id="regionCanvas"></canvas>
@@ -203,6 +222,15 @@
                                     <span class="detail-label">Noise Reduction:</span>
                                     <span id="profileNR" class="detail-value">—</span>
                                 </div>
+                            </div>
+                        </div>
+                        <div class="luminance-display" style="margin-top: 1rem; padding: 0.75rem; background: #2d3748; border-radius: 4px;">
+                            <div class="profile-detail-row">
+                                <span class="detail-label" style="font-weight: bold; color: #ffa500;">Scene Luminance:</span>
+                                <span id="sceneLuminance" class="detail-value" style="font-weight: bold; color: #ffa500; font-size: 1.2em;">—</span>
+                            </div>
+                            <div style="margin-top: 0.5rem; font-size: 0.85rem; color: #a0aec0;">
+                                <div>Thresholds: Day Bright ≥<span id="thresholdDayBright">—</span>, Day ≥<span id="thresholdDay">—</span>, Dusk Bright ≥<span id="thresholdDuskBright">—</span>, Dusk Dark ≥<span id="thresholdDuskDark">—</span></div>
                             </div>
                         </div>
                         <h3 style="margin-top: 1.5rem;">Force Profile</h3>

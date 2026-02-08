@@ -388,6 +388,36 @@ section {
 .modal-content h3 { font-size: 16px; color: #2d3748; margin-bottom: 10px; }
 .modal-content p { margin-bottom: 20px; color: #718096; }
 
+.region-mode-toggle {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    justify-content: center;
+}
+
+.mode-btn {
+    padding: 10px 20px;
+    border: 2px solid #e2e8f0;
+    border-radius: 6px;
+    background: white;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    color: #718096;
+}
+
+.mode-btn:hover {
+    border-color: #4299e1;
+    background: #ebf8ff;
+}
+
+.mode-btn.active {
+    background: #4299e1;
+    border-color: #4299e1;
+    color: white;
+}
+
 .modal-body {
     display: flex;
     gap: 20px;

@@ -46,6 +46,8 @@ config = {
     'cooldown_seconds': 5,
     'detection_regions': [],
     'use_regions': False,
+    'calibration_regions': [],
+    'use_calibration_regions': False,
     'save_stills': True,
     'camera_settings': {}
 }
@@ -55,7 +57,8 @@ state = {
     'capturing': False,
     'motion_detected': False,
     'last_motion': None,
-    'active_profile': None
+    'active_profile': None,
+    'last_luminance': None
 }
 
 # Frame cache for preview (avoids camera lock contention)
@@ -155,10 +158,10 @@ CAMERA_PROFILES = {
 # # Below THRESHOLD_DUSK_DARK = NIGHT (artificial lighting, very low light)
 
 
-THRESHOLD_DAY_BRIGHT = 180  # Full sun, bright clouds, reflections
-THRESHOLD_DAY = 130         # Normal daylight (most of the day)
-THRESHOLD_DUSK_BRIGHT = 90 # Bright dusk, overcast, early golden hour
-THRESHOLD_DUSK_DARK = 60    # True dusk (sky bright, ground dark, colour shifts)
+THRESHOLD_DAY_BRIGHT = 160  # Full sun, bright clouds, reflections
+THRESHOLD_DAY = 120         # Normal daylight (most of the day)
+THRESHOLD_DUSK_BRIGHT = 80 # Bright dusk, overcast, early golden hour
+THRESHOLD_DUSK_DARK = 30    # True dusk (sky bright, ground dark, colour shifts)
 # Below THRESHOLD_DUSK_DARK = NIGHT (artificial lighting, very low light)
 
 # Legacy threshold names for compatibility
@@ -401,6 +404,29 @@ def build_region_mask():
     return mask
 
 
+def build_calibration_mask():
+    """Pre-compute calibration mask for lores stream dimensions.
+    
+    This mask excludes bright sky areas from luminance measurements,
+    focusing on the ground-level scene for more accurate profile selection.
+    """
+    if not config.get('use_calibration_regions') or not config.get('calibration_regions'):
+        return None
+
+    scale_x = LORES_SIZE[0] / MAIN_SIZE[0]
+    scale_y = LORES_SIZE[1] / MAIN_SIZE[1]
+
+    mask = np.zeros((LORES_SIZE[1], LORES_SIZE[0]), dtype=np.uint8)
+    for region in config['calibration_regions']:
+        x1, y1, x2, y2 = region
+        lx1 = int(x1 * scale_x)
+        ly1 = int(y1 * scale_y)
+        lx2 = int(x2 * scale_x)
+        ly2 = int(y2 * scale_y)
+        mask[ly1:ly2, lx1:lx2] = 255
+    return mask
+
+
 def detect_motion_lores(lores_frame, region_mask=None):
     """Motion detection on the low-res YUV420 Y channel."""
     global prev_lores
@@ -566,7 +592,8 @@ def api_config():
 
     data = request.get_json(silent=True) or {}
 
-    regions_changed = 'detection_regions' in data or 'use_regions' in data
+    regions_changed = ('detection_regions' in data or 'use_regions' in data or 
+                       'calibration_regions' in data or 'use_calibration_regions' in data)
 
     for k, v in data.items():
         if k in config:
@@ -760,10 +787,17 @@ def api_camera_settings():
     """Return current active profile info (read-only — profiles manage controls)"""
     active = state.get('active_profile', None)
     profile_data = CAMERA_PROFILES.get(active, {}) if active else {}
+    luminance = state.get('last_luminance', None)
     return jsonify({
         'active_profile': active,
         'profiles': list(CAMERA_PROFILES.keys()),
-        'thresholds': {'day': DAY_THRESHOLD, 'dusk': DUSK_THRESHOLD},
+        'thresholds': {
+            'day_bright': THRESHOLD_DAY_BRIGHT,
+            'day': THRESHOLD_DAY,
+            'dusk_bright': THRESHOLD_DUSK_BRIGHT,
+            'dusk_dark': THRESHOLD_DUSK_DARK
+        },
+        'luminance': luminance,
         'current_controls': profile_data
     })
 
@@ -826,14 +860,26 @@ def measure_luminance(frame):
     return float(ycrcb[:, :, 0].mean())
 
 
-def measure_luminance_lores(lores_frame):
+def measure_luminance_lores(lores_frame, calibration_mask=None):
     """Measure mean luminance (Y) from a lores YUV420 frame.
 
     Use the Y channel directly to avoid ISP/CCM/colour feedback loops.
+    If calibration_mask is provided, only measure luminance from masked regions
+    (useful to exclude bright sky areas that skew auto-exposure).
     """
     h, w = LORES_SIZE[1], LORES_SIZE[0]
     # lores_frame Y plane is in the top 'h' rows and left 'w' columns
     y_plane = lores_frame[:h, :w]
+    
+    if calibration_mask is not None:
+        # Only measure pixels within the mask
+        masked_pixels = y_plane[calibration_mask > 0]
+        if len(masked_pixels) > 0:
+            return float(masked_pixels.mean())
+        else:
+            # Fallback to full frame if mask is empty
+            return float(y_plane.mean())
+    
     return float(y_plane.mean())
 
 
@@ -859,8 +905,11 @@ def auto_calibration_loop():
     calibration_stop.wait(10)
 
     active_profile = None
+    calibration_mask = None
 
     while not calibration_stop.is_set():
+        # Rebuild calibration mask if config changed
+        calibration_mask = build_calibration_mask()
         try:
             if not camera or not camera.started:
                 calibration_stop.wait(10)
@@ -869,7 +918,8 @@ def auto_calibration_loop():
             # Capture one lores frame and measure Y channel to avoid ISP feedback
             # Use capture_array (non-blocking, safe for concurrent use)
             lores = camera.capture_array("lores")
-            lum = measure_luminance_lores(lores)
+            lum = measure_luminance_lores(lores, calibration_mask)
+            state['last_luminance'] = lum  # Store for API access
 
             # Classify scene based on lores luminance (5 profiles)
             if lum >= THRESHOLD_DAY_BRIGHT:
@@ -886,9 +936,11 @@ def auto_calibration_loop():
             # Only apply if profile changed
             if profile_name != active_profile:
                 profile = CAMERA_PROFILES[profile_name]
+                
+                mask_info = " [masked]" if calibration_mask is not None else ""
 
                 print(
-                    f"[calibration] Switching profile -> {profile_name} (lum={lum:.0f})",
+                    f"[calibration] Switching profile -> {profile_name} (lum={lum:.0f}{mask_info})",
                     flush=True
                 )
 
@@ -905,8 +957,9 @@ def auto_calibration_loop():
                 except Exception as e:
                     print(f"[calibration] Failed to apply profile: {e}", flush=True)
             else:
+                mask_info = " [masked]" if calibration_mask is not None else ""
                 print(
-                    f"[calibration] Profile {active_profile} stable (lum={lum:.0f})",
+                    f"[calibration] Profile {active_profile} stable (lum={lum:.0f}{mask_info})",
                     flush=True
                 )
 
