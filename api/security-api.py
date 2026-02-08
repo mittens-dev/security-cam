@@ -72,6 +72,7 @@ camera_lock = threading.Lock()
 prev_lores = None
 stop_flag = threading.Event()
 calibration_stop = threading.Event()
+calibration_trigger = threading.Event()  # Set to force immediate calibration
 monitor_thread = None
 
 LORES_SIZE = (320, 240)
@@ -82,9 +83,19 @@ MAIN_SIZE = (2304, 1296)  # 3MP resolution
 # MAIN_SIZE = (4608, 2592)
 
 # Auto-calibration targets
-CALIB_INTERVAL = 300        # 5 minutes between calibrations
-TARGET_LUMINANCE = 115.0    # target mean Y (0-255) — slightly below middle
-DAMPING = 0.3               # move 30% toward target per cycle
+# AUTO-CALIBRATION TUNING
+# Adjust these to control how the system adapts brightness/contrast
+
+# How bright should daytime images be? (0-255 scale)
+# 100 = dim/safe for night | 120 = balanced | 140 = bright/punchy for daytime
+AUTO_BRIGHTNESS_TARGET = 155.0
+
+# How fast to adapt? (0.0 = never, 1.0 = instant change per cycle)
+# 0.2 = slow/smooth | 0.4 = moderate | 0.6 = fast/responsive
+CALIBRATION_SPEED = 0.4
+
+# How often to check and adjust? (in seconds)
+CALIBRATION_INTERVAL_SECONDS = 300  # Every 5 minutes
 
 
 def frame_to_image(frame):
@@ -697,6 +708,13 @@ def api_camera_settings():
     return jsonify({'success': True, 'camera_settings': config.get('camera_settings', {})})
 
 
+@app.route('/api/calibrate', methods=['POST'])
+def api_calibrate():
+    """Force immediate auto-calibration (brightness/contrast adjustment)"""
+    calibration_trigger.set()
+    return jsonify({'success': True, 'message': 'Calibration triggered'})
+
+
 @app.route('/api/frame')
 def api_frame():
     """Get current camera frame as JPEG"""
@@ -804,22 +822,22 @@ def auto_calibration_loop():
             #   lum=255 (very bright) -> brightness = -0.3 (darken)
             #   lum=TARGET (ideal)    -> brightness = 0.0
             #   lum=30 (very dark)    -> brightness = 0.5 (brighten)
-            lum_error = (TARGET_LUMINANCE - lum) / 255.0  # -0.5 to +0.5 range
-            target_brightness = max(-0.5, min(0.5, lum_error * 2.0))
+            lum_error = (AUTO_BRIGHTNESS_TARGET - lum) / 255.0  # -0.5 to +0.5 range
+            target_brightness = max(-0.5, min(0.5, lum_error * 3.0))
 
             # Compute desired Contrast:
             #   Bright scenes: reduce contrast toward 1.0 (already well-lit)
             #   Dark scenes: boost contrast toward 1.8 (helps visibility)
-            if lum > TARGET_LUMINANCE:
+            if lum > AUTO_BRIGHTNESS_TARGET:
                 target_contrast = 1.0
             else:
                 # Scale up contrast as it gets darker, max 2.0
-                dark_ratio = max(0, (TARGET_LUMINANCE - lum) / TARGET_LUMINANCE)
+                dark_ratio = max(0, (AUTO_BRIGHTNESS_TARGET - lum) / AUTO_BRIGHTNESS_TARGET)
                 target_contrast = 1.0 + dark_ratio * 1.0  # up to 2.0
 
-            # Dampen: move only 30% toward target
-            new_brightness = cur_brightness + DAMPING * (target_brightness - cur_brightness)
-            new_contrast = cur_contrast + DAMPING * (target_contrast - cur_contrast)
+            # Apply calibration speed: adjust toward targets at configured speed
+            new_brightness = cur_brightness + CALIBRATION_SPEED * (target_brightness - cur_brightness)
+            new_contrast = cur_contrast + CALIBRATION_SPEED * (target_contrast - cur_contrast)
 
             # Round for cleanliness
             new_brightness = round(new_brightness, 2)
@@ -844,7 +862,12 @@ def auto_calibration_loop():
         except Exception as e:
             print(f"[calibration] Error: {e}", flush=True)
 
-        calibration_stop.wait(CALIB_INTERVAL)
+        # Check if forced calibration was requested, otherwise wait normally
+        if calibration_trigger.is_set():
+            calibration_trigger.clear()
+            print("[calibration] Forced calibration triggered", flush=True)
+        else:
+            calibration_stop.wait(CALIBRATION_INTERVAL_SECONDS)
 
     print("[calibration] Auto-calibration thread stopped", flush=True)
 

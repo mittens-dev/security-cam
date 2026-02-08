@@ -120,6 +120,10 @@ function updateConfigDisplay(cfg) {
     elements.burstInterval.value = cfg.burst_interval || 0.5;
     elements.cooldownSeconds.value = cfg.cooldown_seconds || 5;
     state.config = cfg;
+    
+    // Update regions count on main page
+    const regionCount = cfg.detection_regions?.length || 0;
+    elements.regionsCount.textContent = `${regionCount} region${regionCount !== 1 ? 's' : ''} defined`;
 }
 
 function displayEvents(events) {
@@ -458,6 +462,9 @@ async function saveRegionsToConfig() {
         if (response) {
             state.config.detection_regions = regionDrawing.regions;
             state.config.use_regions = elements.useRegions.checked;
+            // Update regions count on main page
+            const regionCount = regionDrawing.regions.length;
+            elements.regionsCount.textContent = `${regionCount} region${regionCount !== 1 ? 's' : ''} defined`;
             showAlert('Detection regions saved!', 'success');
             closeRegionModal();
         }
@@ -546,18 +553,20 @@ function setupCameraSettingsModal() {
     const closeBtn = document.getElementById('closeCameraSettings');
     const resetBtn = document.getElementById('resetCameraSettings');
     const revertBtn = document.getElementById('revertCameraSettings');
+    const calibrateBtn = document.getElementById('calibrateNow');
 
     console.log('setupCameraSettingsModal - Elements found:', {
         openBtn: !!openBtn,
         modal: !!modal,
         closeBtn: !!closeBtn,
         resetBtn: !!resetBtn,
-        revertBtn: !!revertBtn
+        revertBtn: !!revertBtn,
+        calibrateBtn: !!calibrateBtn
     });
 
-    if (!openBtn || !modal || !closeBtn || !resetBtn || !revertBtn) {
+    if (!openBtn || !modal || !closeBtn || !resetBtn || !revertBtn || !calibrateBtn) {
         console.error('setupCameraSettingsModal: Missing required elements', {
-            openBtn, modal, closeBtn, resetBtn, revertBtn
+            openBtn, modal, closeBtn, resetBtn, revertBtn, calibrateBtn
         });
         return;
     }
@@ -731,6 +740,24 @@ function setupCameraSettingsModal() {
                 await loadSettings();
                 showAlert('Restored to default settings', 'info');
             });
+        }
+    });
+
+    calibrateBtn.addEventListener('click', async () => {
+        calibrateBtn.disabled = true;
+        calibrateBtn.textContent = '⚙ Calibrating...';
+        try {
+            const result = await fetch('/api/calibrate', { method: 'POST' });
+            if (result.ok) {
+                showAlert('✓ Calibration triggered (check logs)', 'success');
+            } else {
+                showAlert('Failed to trigger calibration', 'error');
+            }
+        } catch (e) {
+            showAlert('Error: ' + e.message, 'error');
+        } finally {
+            calibrateBtn.disabled = false;
+            calibrateBtn.textContent = '⚙ Calibrate Now';
         }
     });
 
