@@ -94,6 +94,8 @@ CAMERA_PROFILES = {
     "DUSK": {
         "AeEnable": True,
         "AwbEnable": True,
+        "ExposureValue": 0.5,          # Boost exposure slightly in low light
+        "AnalogueGain": 2.0,
         "Brightness": 0.0,
         "Contrast": 1.0,
         "Saturation": 1.0,
