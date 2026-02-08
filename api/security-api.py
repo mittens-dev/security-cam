@@ -75,7 +75,11 @@ calibration_stop = threading.Event()
 monitor_thread = None
 
 LORES_SIZE = (320, 240)
+
+# MAIN_SIZE = (1280, 720)  # 720p resolution
+# MAIN_SIZE = (1920, 1080)  # 1080p resolution
 MAIN_SIZE = (2304, 1296)  # 3MP resolution
+# MAIN_SIZE = (4608, 2592)
 
 # Auto-calibration targets
 CALIB_INTERVAL = 300        # 5 minutes between calibrations

@@ -7,40 +7,40 @@
   "cooldown_seconds": 5,
   "detection_regions": [
     [
-      24,
-      592,
-      227,
-      870
+      1681,
+      547,
+      1850,
+      883
     ],
     [
-      488,
-      611,
-      634,
-      740
+      15,
+      616,
+      197,
+      883
     ],
     [
-      1742,
-      601,
-      1851,
-      916
+      516,
+      621,
+      623,
+      683
     ],
     [
-      1152,
-      607,
-      1435,
-      692
+      1161,
+      583,
+      1453,
+      698
     ]
   ],
-  "use_regions": true,
+  "use_regions": false,
   "save_stills": true,
   "camera_settings": {
     "exposure_time": 2600,
     "analogue_gain": 1,
-    "brightness": 0.16,
-    "contrast": 1.91,
+    "brightness": 0.04,
+    "contrast": 1.07,
     "saturation": 1.25,
-    "awb_mode": 4,
+    "awb_mode": 5,
     "still_saturation": 0.6,
-    "still_contrast": 0.5
+    "still_contrast": 0.7
   }
 }
