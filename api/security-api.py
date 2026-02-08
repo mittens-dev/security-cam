@@ -38,8 +38,8 @@ CORS(app)
 
 # === STATE ===
 config = {
-    'motion_threshold': 500,
-    'motion_sensitivity': 25,
+    'motion_threshold': 100,
+    'motion_sensitivity': 15,
     'capture_on_motion': True,
     'burst_count': 5,
     'burst_interval': 0.5,
@@ -79,43 +79,91 @@ LORES_SIZE = (320, 240)
 MAIN_SIZE = (2304, 1296)  # 3MP resolution
 # MAIN_SIZE = (4608, 2592)
 
+BURST_COUNT = 5
+BURST_INTERVAL = 0.5  # seconds between burst shots
+
 # === CAMERA PROFILES (applied automatically based on scene luminance) ===
 CAMERA_PROFILES = {
-    "DAY": {
-        "AeEnable": True,
-        "AwbEnable": True,             # Let ISP handle white balance in day
-        # No ColourGains here — allow libcamera to manage colour pipeline
-        "Brightness": 0.0,
-        "Contrast": 1.0,
-        "Saturation": 1.0,
-        "Sharpness": 1.0,
-        "NoiseReductionMode": 2,
-    },
-    "DUSK": {
+
+    # Very bright daylight (sun, clouds, reflections)
+    "DAY_BRIGHT": {
         "AeEnable": True,
         "AwbEnable": True,
-        "ExposureValue": 0.5,          # Boost exposure slightly in low light
-        "AnalogueGain": 2.0,
+        "ExposureValue": 0.0,      # Trust AE fully
         "Brightness": 0.0,
         "Contrast": 1.0,
         "Saturation": 1.0,
         "Sharpness": 1.0,
+        "NoiseReductionMode": 1,   # Minimal NR
+    },
+
+    # Normal daylight (most of the day)
+    "DAY": {
+        "AeEnable": True,
+        "AwbEnable": True,
+        "ExposureValue": 0.6,      # Slight subject bias
+        "Brightness": 0.0,
+        "Contrast": 1.05,
+        "Saturation": 1.0,
+        "Sharpness": 1.0,
+        "NoiseReductionMode": 1,
+    },
+
+    # Bright dusk / overcast / early golden hour
+    "DUSK_BRIGHT": {
+        "AeEnable": True,
+        "AwbEnable": True,
+        "ExposureValue": 1.5,      # Compensate for sky dominance
+        "Brightness": 0.0,
+        "Contrast": 1.05,
+        "Saturation": 1.0,
+        "Sharpness": 1.0,
         "NoiseReductionMode": 2,
     },
+
+    # True dusk (sky bright, ground dark, colour shifts)
+    "DUSK_DARK": {
+        "AeEnable": True,
+        "AwbEnable": True,
+        "ExposureValue": 1.8,      # Strong bias toward subject
+        "Brightness": 0.0,
+        "Contrast": 1.1,
+        "Saturation": 1.0,
+        "Sharpness": 0.95,
+        "NoiseReductionMode": 2,
+    },
+
+    # Night / artificial lighting
     "NIGHT": {
         "AeEnable": True,
-        "AwbEnable": True,             # Keep AWB on initially to avoid CCM mismatch
+        "AwbEnable": True,         # Start ON; you may lock later
+        # No ExposureValue → defaults to 0.0
         "Brightness": 0.0,
         "Contrast": 1.0,
-        "Saturation": 0.9,             # reduce chroma noise
-        "Sharpness": 0.8,
-        "NoiseReductionMode": 3,
-    }
+        "Saturation": 0.9,         # Reduce chroma noise
+        "Sharpness": 0.8,          # Avoid sharpening noise
+        "NoiseReductionMode": 3,   # Strong NR
+    },
 }
 
+
 # Scene classification thresholds (luminance 0-255)
-DAY_THRESHOLD = 140     # Above this = DAY profile
-DUSK_THRESHOLD = 90     # Above this = DUSK, below = NIGHT
+# THRESHOLD_DAY_BRIGHT = 180  # Full sun, bright clouds, reflections
+# THRESHOLD_DAY = 140         # Normal daylight (most of the day)
+# THRESHOLD_DUSK_BRIGHT = 110 # Bright dusk, overcast, early golden hour
+# THRESHOLD_DUSK_DARK = 80    # True dusk (sky bright, ground dark, colour shifts)
+# # Below THRESHOLD_DUSK_DARK = NIGHT (artificial lighting, very low light)
+
+
+THRESHOLD_DAY_BRIGHT = 180  # Full sun, bright clouds, reflections
+THRESHOLD_DAY = 130         # Normal daylight (most of the day)
+THRESHOLD_DUSK_BRIGHT = 90 # Bright dusk, overcast, early golden hour
+THRESHOLD_DUSK_DARK = 60    # True dusk (sky bright, ground dark, colour shifts)
+# Below THRESHOLD_DUSK_DARK = NIGHT (artificial lighting, very low light)
+
+# Legacy threshold names for compatibility
+DAY_THRESHOLD = THRESHOLD_DAY
+DUSK_THRESHOLD = THRESHOLD_DUSK_DARK
 
 # How often to check scene and switch profiles (in seconds)
 CALIBRATION_INTERVAL_SECONDS = 300  # Every 5 minutes
@@ -302,9 +350,9 @@ def capture_burst(count=None, interval=None):
         return []
 
     if count is None:
-        count = config.get('burst_count', 5)
+        count = config.get('burst_count', BURST_COUNT)
     if interval is None:
-        interval = config.get('burst_interval', 0.5)
+        interval = config.get('burst_interval', BURST_INTERVAL)
 
     print(f"[capture_burst] start count={count} interval={interval}", flush=True)
 
@@ -823,11 +871,15 @@ def auto_calibration_loop():
             lores = camera.capture_array("lores")
             lum = measure_luminance_lores(lores)
 
-            # Classify scene based on lores luminance
-            if lum >= DAY_THRESHOLD:
+            # Classify scene based on lores luminance (5 profiles)
+            if lum >= THRESHOLD_DAY_BRIGHT:
+                profile_name = "DAY_BRIGHT"
+            elif lum >= THRESHOLD_DAY:
                 profile_name = "DAY"
-            elif lum >= DUSK_THRESHOLD:
-                profile_name = "DUSK"
+            elif lum >= THRESHOLD_DUSK_BRIGHT:
+                profile_name = "DUSK_BRIGHT"
+            elif lum >= THRESHOLD_DUSK_DARK:
+                profile_name = "DUSK_DARK"
             else:
                 profile_name = "NIGHT"
 

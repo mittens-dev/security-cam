@@ -1,6 +1,6 @@
 {
-  "motion_threshold": 100,
-  "motion_sensitivity": 25,
+  "motion_threshold": 10,
+  "motion_sensitivity": 5,
   "capture_on_motion": true,
   "burst_count": 5,
   "burst_interval": 0.5,
@@ -34,13 +34,13 @@
   "use_regions": true,
   "save_stills": true,
   "camera_settings": {
-    "exposure_time": 2600,
     "analogue_gain": 1,
+    "awb_mode": 1,
     "brightness": 0.2,
     "contrast": 1.15,
+    "exposure_time": 2600,
     "saturation": 0.6,
-    "awb_mode": 1,
-    "still_saturation": 0.6,
-    "still_contrast": 0.6
+    "still_contrast": 0.6,
+    "still_saturation": 0.6
   }
 }

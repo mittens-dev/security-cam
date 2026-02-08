@@ -562,13 +562,25 @@ section {
     letter-spacing: 0.5px;
 }
 
+.profile-badge.profile-day_bright {
+    background: #fffbeb;
+    color: #92400e;
+    border: 2px solid #fbbf24;
+}
+
 .profile-badge.profile-day {
     background: #fefcbf;
     color: #975a16;
     border: 2px solid #ecc94b;
 }
 
-.profile-badge.profile-dusk {
+.profile-badge.profile-dusk_bright {
+    background: #fef3c7;
+    color: #92400e;
+    border: 2px solid #f59e0b;
+}
+
+.profile-badge.profile-dusk_dark {
     background: #fed7e2;
     color: #97266d;
     border: 2px solid #ed64a6;

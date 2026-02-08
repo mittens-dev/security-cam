@@ -554,8 +554,10 @@ function setupCameraSettingsModal() {
     const modal = document.getElementById('cameraModal');
     const closeBtn = document.getElementById('closeCameraSettings');
     const calibrateBtn = document.getElementById('calibrateNow');
+    const forceDayBrightBtn = document.getElementById('forceDayBright');
     const forceDayBtn = document.getElementById('forceDay');
-    const forceDuskBtn = document.getElementById('forceDusk');
+    const forceDuskBrightBtn = document.getElementById('forceDuskBright');
+    const forceDuskDarkBtn = document.getElementById('forceDuskDark');
     const forceNightBtn = document.getElementById('forceNight');
 
     if (!openBtn || !modal || !closeBtn || !calibrateBtn) {
@@ -649,8 +651,10 @@ function setupCameraSettingsModal() {
         }
     }
 
+    if (forceDayBrightBtn) forceDayBrightBtn.addEventListener('click', () => forceProfile('DAY_BRIGHT'));
     if (forceDayBtn) forceDayBtn.addEventListener('click', () => forceProfile('DAY'));
-    if (forceDuskBtn) forceDuskBtn.addEventListener('click', () => forceProfile('DUSK'));
+    if (forceDuskBrightBtn) forceDuskBrightBtn.addEventListener('click', () => forceProfile('DUSK_BRIGHT'));
+    if (forceDuskDarkBtn) forceDuskDarkBtn.addEventListener('click', () => forceProfile('DUSK_DARK'));
     if (forceNightBtn) forceNightBtn.addEventListener('click', () => forceProfile('NIGHT'));
 
     modal.addEventListener('click', (e) => {
