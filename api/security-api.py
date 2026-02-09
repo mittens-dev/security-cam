@@ -104,7 +104,7 @@ CAMERA_PROFILES = {
     "DAY": {
         "AeEnable": True,
         "AwbEnable": True,
-        "ExposureValue": 0.6,      # Slight subject bias
+        "ExposureValue": 0,      # Trust AE fully
         "Brightness": 0.0,
         "Contrast": 1.05,
         "Saturation": 1.0,
@@ -361,6 +361,16 @@ def capture_burst(count=None, interval=None):
 
     filenames = []
     ts_base = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Profile suffix for filename
+    profile_suffixes = {
+        'DAY_BRIGHT': 'DB',
+        'DAY': 'Da',
+        'DUSK_BRIGHT': 'KB',
+        'DUSK_DARK': 'KD',
+        'NIGHT': 'Ni'
+    }
+    profile_suffix = profile_suffixes.get(state.get('active_profile'), 'XX')
 
     for i in range(count):
         try:
@@ -370,7 +380,7 @@ def capture_burst(count=None, interval=None):
             img = frame_to_image(frame)
 
             # Save pure ISP output — no post-processing
-            filename = f"motion_{ts_base}_burst{i+1}.jpg"
+            filename = f"motion_{ts_base}_burst{i+1}_{profile_suffix}.jpg"
             filepath = STILLS_DIR / filename
             img.save(str(filepath), 'JPEG', quality=90)
             filenames.append(filename)
@@ -798,6 +808,8 @@ def api_camera_settings():
             'dusk_dark': THRESHOLD_DUSK_DARK
         },
         'luminance': luminance,
+        'luminance_unmasked': state.get('last_luminance_unmasked'),
+        'mask_active': state.get('calibration_mask_active', False),
         'current_controls': profile_data
     })
 
@@ -919,7 +931,10 @@ def auto_calibration_loop():
             # Use capture_array (non-blocking, safe for concurrent use)
             lores = camera.capture_array("lores")
             lum = measure_luminance_lores(lores, calibration_mask)
+            lum_unmasked = measure_luminance_lores(lores, None)  # For debug comparison
             state['last_luminance'] = lum  # Store for API access
+            state['last_luminance_unmasked'] = lum_unmasked  # Debug: unmasked value
+            state['calibration_mask_active'] = calibration_mask is not None  # Debug
 
             # Classify scene based on lores luminance (5 profiles)
             if lum >= THRESHOLD_DAY_BRIGHT:

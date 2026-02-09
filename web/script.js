@@ -660,6 +660,13 @@ function setupCameraSettingsModal() {
             } else {
                 el('sceneLuminance', '—');
             }
+            // Debug: show unmasked luminance for comparison
+            if (data.luminance_unmasked !== null && data.luminance_unmasked !== undefined) {
+                el('sceneLuminanceUnmasked', data.luminance_unmasked.toFixed(1));
+            } else {
+                el('sceneLuminanceUnmasked', '—');
+            }
+            el('maskActiveStatus', data.mask_active ? '✓ Active' : '✗ Inactive');
             if (data.thresholds) {
                 el('thresholdDayBright', data.thresholds.day_bright?.toFixed(0) ?? '—');
                 el('thresholdDay', data.thresholds.day?.toFixed(0) ?? '—');

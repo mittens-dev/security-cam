@@ -226,8 +226,16 @@
                         </div>
                         <div class="luminance-display" style="margin-top: 1rem; padding: 0.75rem; background: #2d3748; border-radius: 4px;">
                             <div class="profile-detail-row">
-                                <span class="detail-label" style="font-weight: bold; color: #ffa500;">Scene Luminance:</span>
+                                <span class="detail-label" style="font-weight: bold; color: #ffa500;">Scene Luminance (masked):</span>
                                 <span id="sceneLuminance" class="detail-value" style="font-weight: bold; color: #ffa500; font-size: 1.2em;">—</span>
+                            </div>
+                            <div class="profile-detail-row" style="margin-top: 0.25rem;">
+                                <span class="detail-label" style="color: #a0aec0;">Luminance (full frame):</span>
+                                <span id="sceneLuminanceUnmasked" class="detail-value" style="color: #a0aec0;">—</span>
+                            </div>
+                            <div class="profile-detail-row" style="margin-top: 0.25rem;">
+                                <span class="detail-label" style="color: #a0aec0;">Calibration Mask:</span>
+                                <span id="maskActiveStatus" class="detail-value" style="color: #a0aec0;">—</span>
                             </div>
                             <div style="margin-top: 0.5rem; font-size: 0.85rem; color: #a0aec0;">
                                 <div>Thresholds: Day Bright ≥<span id="thresholdDayBright">—</span>, Day ≥<span id="thresholdDay">—</span>, Dusk Bright ≥<span id="thresholdDuskBright">—</span>, Dusk Dark ≥<span id="thresholdDuskDark">—</span></div>
