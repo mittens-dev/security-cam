@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 echo -e "${BLUE}════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}Security Camera - API Service Setup${NC}"
+echo -e "${BLUE}Security Camera - API Service Setup (Stills-Only)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════${NC}"
 echo ""
 

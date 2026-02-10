@@ -1,8 +1,0 @@
-# After cloning, run this to set up network (one time only):
-# sudo ./setup-network.sh
-
-# Then for Pi Zero, set your WiFi SSID:
-# nmcli connection modify wlan0-static 802-11-wireless.ssid "YOUR_SSID"
-# nmcli connection modify wlan0-static wifi-sec.psk "YOUR_PASSWORD"
-
-# That's it. Never touch the network config scripts again.

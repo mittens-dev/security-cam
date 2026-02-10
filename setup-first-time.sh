@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 echo -e "${BLUE}════════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}Security Camera - First-Time Setup${NC}"
+echo -e "${BLUE}Security Camera - First-Time Setup (Stills-Only)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════${NC}"
 echo ""
 
@@ -73,10 +73,10 @@ echo ""
 
 # Set permissions for directories
 echo -e "${YELLOW}Setting up directories...${NC}"
-mkdir -p recordings logs stills
-chmod 755 recordings logs stills
+mkdir -p stills logs recordings
+chmod 755 stills logs recordings
 chmod +x api/security-api.py
-echo -e "${GREEN}✓ Directories created${NC}"
+echo -e "${GREEN}✓ Directories created (stills, logs, recordings)${NC}"
 echo ""
 
 echo -e "${GREEN}════════════════════════════════════════════════════${NC}"

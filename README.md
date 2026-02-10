@@ -1,58 +1,42 @@
-# 🔒 Raspberry Pi Camera 3 Security System
+# 🔒 Raspberry Pi Camera 3 Security System (Stills-Only)
 
-A complete security camera system with motion detection and timestamps for Raspberry Pi Camera Module 3.
+A lightweight, stills-only security camera system with intelligent motion detection and adaptive camera profiles for Raspberry Pi Camera Module 3.
 
 ## Features
 
-- ✅ **Real-time Motion Detection** - Frame differencing with optional region-based detection
-- 🎯 **Detection Zones** - Draw custom regions on camera preview for targeted motion detection
-- 📸 **Still Image Capture** - Automatic JPEG snapshot when motion is detected
-- 📹 **MP4 Recording** - Auto-records to proper MP4 format when motion triggers
-- 🌐 **Web Interface** - Modern, responsive control panel with canvas drawing
+- 📸 **Stills-Only Capture** - Lightweight JPEG snapshots, no video encoding overhead
+- 🎯 **Detection Zones** - Draw custom regions for targeted motion detection
+- 🌅 **Adaptive Camera Profiles** - Automatic adjustment based on ambient light (5 levels: Day Bright, Day, Dusk Bright, Dusk Dark, Night)
+- 🔆 **Calibration Regions** - Define areas for accurate luminance measurement
+- ⚡ **Burst Mode** - Capture multiple frames per motion event
+- 🌐 **Web Interface** - Modern, responsive control panel with region drawing
+- 👤 **Ownership Controls** - Multi-client browser sync with ownership management
 - 📊 **Event Logging** - Tracks all motion events with timestamps and pixel counts
-- ⚙️ **Configurable Settings** - Adjust sensitivity, thresholds, recording duration, and regions
-- 💾 **Recording Management** - View, download, and delete recordings and stills
+- ⚙️ **Configurable Settings** - Adjust sensitivity, thresholds, burst count, and regions
+- 💾 **Recording Management** - View, download, and delete stills
+- 🗄️ **Daily Archiving** - Automatic organization of stills by date
 - 🚀 **Auto-start on Boot** - Runs as a systemd service
 - 🔌 **REST API** - Complete API for integration with other systems
 
+## Why Stills-Only?
+
+This system is optimized for reliability and efficiency:
+- **Lower CPU usage** - No video encoding overhead
+- **Faster response** - Immediate still capture vs. buffered video
+- **Better stability** - Fewer moving parts, no encoder crashes
+- **Easier review** - Individual JPEGs with timestamps in filename
+- **Storage efficiency** - Only capture when motion detected
+
 ## Hardware Requirements
 
-- Raspberry Pi (3/4/5 recommended)
+- Raspberry Pi (4/5 recommended, Zero 2 W supported)
 - Raspberry Pi Camera Module 3
-- MicroSD card (16GB+ recommended for recordings)
+- MicroSD card (32GB+ recommended)
 - Power supply
 
 ## Quick Start
 
-### 1. Network Configuration (One-Time Setup)
-Configure static IP based on device type:
-```bash
-sudo ./configure_network.sh
-```
-- Pi4 → eth0 → 192.168.4.175
-- Pi Zero → wlan0 → 192.168.4.176
-
-See [Network Configuration Guide](./NETWORK_CONFIG.md) for details.
-
-### 2. Install Dependencies
-```bash
-./setup.sh
-```
-
-## Development Setup
-
-For development work with SSH access from your main PC, see:
-**[SSH Development Setup Guide](./SSH_DEVELOPMENT_SETUP.md)**
-
-This covers:
-- Setting up SSH key authentication
-- VS Code Remote development
-- File syncing with rsync
-- Running the dev server
-
-## Quick Start
-
-### 1. Clone the Repository
+### 1. Clone Repository
 
 ```bash
 cd /home/pi/dev
@@ -60,163 +44,208 @@ git clone <your-repo-url> security-cam
 cd security-cam
 ```
 
-### 2. Run Setup Script
+### 2. First-Time Setup
 
 ```bash
-chmod +x setup.sh
-./setup.sh
+chmod +x *.sh
+sudo ./setup-first-time.sh
 ```
 
-The setup script will:
-- Install all system dependencies
-- Set up Python virtual environment
-- Install required packages
-- Configure nginx web server
-- Create and enable systemd service
-- Enable the camera interface
+This installs all system dependencies and configures the camera.
 
-### 3. Reboot (if first time)
+### 3. Network Configuration
+
+```bash
+sudo ./setup-network.sh
+```
+
+Configures static IPs:
+- **Pi4** (Ethernet): `192.168.4.175`
+- **Pi Zero** (WiFi): `192.168.4.176`
+
+See [Network Configuration Guide](./NETWORK_CONFIG.md) for details.
+
+### 4. Setup Services
+
+```bash
+sudo ./setup-api.sh    # API service
+sudo ./setup-web.sh    # Web server (nginx)
+```
+
+### 5. Reboot
 
 ```bash
 sudo reboot
 ```
 
-### 4. Access Web Interface
+### 6. Access Web Interface
 
-Open a browser and navigate to:
-```
-http://<your-pi-ip-address>
-```
-
-For example: `http://192.168.1.100`
+Open a browser:
+- **Pi4**: `http://192.168.4.175`
+- **Pi Zero**: `http://192.168.4.176`
+- **Or**: `http://<hostname>.local`
 
 ## Configuration
 
 ### Web Interface Settings
 
-Access the settings panel in the web interface to configure:
+Access the settings panel to configure:
 
-- **Motion Threshold**: Number of pixels that must change to trigger detection (default: 100)
-- **Motion Sensitivity**: Difference threshold for pixel changes (default: 50, range: 0-255)
-- **Record on Motion**: Automatically record when motion detected (default: enabled)
-- **Recording Duration**: Length of recordings in seconds (default: 2)
-- **Detection Regions**: Draw custom zones on camera preview (optional)
-- **Use Region-Based Detection**: Enable detection only within drawn zones (default: disabled)
-- **Save Stills**: Capture JPEG snapshots on motion (default: enabled)
+**Motion Detection:**
+- **Capture on Motion** - Trigger still capture when motion detected
+- **Motion Threshold** - Total changed pixels needed (combined across all regions)
+- **Motion Sensitivity** - Per-pixel change threshold (0-255, lower = more sensitive)
+- **Burst Count** - Number of stills per motion event (1-15)
+- **Burst Interval** - Seconds between burst captures (0.1-3s)
+- **Cooldown** - Seconds to wait between bursts (prevents flooding, 1-60s)
+
+**Detection Regions:**
+- Draw custom zones on camera preview
+- Enable/disable region-based detection
+- Regions are combined (total pixels across all regions)
+
+**Calibration Regions:**
+- Define areas for luminance measurement (avoid bright spots like sky)
+- Used for automatic camera profile switching
+
+**Camera Settings:**
+- Manual control over exposure, gain, contrast, saturation, etc.
+- Overrides automatic profiles when adjusted
+
+### Automatic Camera Profiles
+
+The system measures ambient luminance and automatically switches between 5 profiles:
+
+1. **Day Bright** (L≥160) - Full sun, high exposure control
+2. **Day** (L≥120) - Normal daylight
+3. **Dusk Bright** (L≥80) - Golden hour, moderate adjustments
+4. **Dusk Dark** (L≥40) - Twilight, increased gain
+5. **Night** (L<40) - Low light, maximum gain
+
+Luminance values are added to filenames (e.g., `motion_20260210_145530_burst1_Da_L142.5.jpg`)
 
 ### Configuration File
 
-Edit `api/config.json` directly for advanced settings:
+Advanced settings in `api/config.json`:
 
 ```json
 {
   "motion_threshold": 100,
-  "motion_sensitivity": 50,
-  "record_on_motion": true,
-  "recording_duration": 2,
+  "motion_sensitivity": 20,
+  "capture_on_motion": true,
+  "burst_count": 4,
+  "burst_interval": 0.3,
+  "cooldown_seconds": 3,
   "detection_regions": [],
   "use_regions": false,
-  "save_stills": true
+  "calibration_regions": [],
+  "use_calibration_regions": false
 }
 ```
 
-Restart the service after editing:
+Restart after editing:
 ```bash
 sudo systemctl restart security-cam
 ```
 
 ## Usage
 
-### Web Interface
+### System Controls
 
-The web interface provides:
+**Start/Stop Monitoring:**
+- Click "Start Monitoring" to begin motion detection
+- Click "Stop Monitoring" to pause
 
-1. **System Controls**
-   - Start/Stop Monitoring
-   - Manual Recording
-   
-2. **Status Display**
-   - Monitoring status
-   - Recording status
-   - Motion detection status
-   - Last motion timestamp
+**Manual Snapshot:**
+- Click "Take Snapshot" to capture burst manually
 
-3. **Settings Panel**
-   - Configure all detection parameters
-   - Save settings permanently
+**Settings:**
+- Adjust motion detection parameters
+- Click "Save Settings" to persist changes
+- Click "Refresh Settings" to reload from server
 
-4. **Motion Events Log**
-   - View recent motion detection events
-   - Timestamps and pixel change counts
+**Ownership:**
+- Click "Claim Ownership" to control settings from your browser
+- Other browsers will see settings as read-only
+- Click "Release Ownership" or "Hard Refresh" to release control
 
-5. **Recordings Manager**
-   - List all recordings
-   - Download recordings
-   - Delete old recordings
+### Drawing Detection Regions
 
-### API Endpoints
+1. Click "Draw Detection Zones"
+2. Draw rectangles on the camera preview
+3. Click regions to select/deselect
+4. Click "Delete Selected" to remove
+5. Toggle "Detection Mode" / "Calibration Mode"
+6. Click "Save Regions" to apply
 
-The system provides a REST API at `http://<pi-ip>:5000/api`:
+**Tips:**
+- Draw regions around areas where motion matters (doors, windows, paths)
+- Avoid areas with trees, shadows, or frequent non-important motion
+- Use calibration regions to exclude sky or bright windows from light measurement
+
+### File Organization
+
+Stills are organized by date:
+```
+stills/
+├── 2026-02-10/
+│   ├── motion_20260210_081530_burst1_Da_L125.3.jpg
+│   ├── motion_20260210_081530_burst2_Da_L125.3.jpg
+│   └── ...
+├── motion_20260210_143025_burst1_KD_L55.8.jpg  # Recent, not yet archived
+└── ...
+```
+
+Automatic daily archiving runs at midnight (via cron job).
+
+## API Endpoints
+
+REST API at `http://<pi-ip>/api`:
 
 **Status & Control:**
-- `GET /api/status` - Get system status (monitoring, recording, motion_detected, last_motion)
-- `GET /api/config` - Get current configuration
+- `GET /api/status` - System status (monitoring, capturing, motion, luminance, profile)
+- `GET /api/config` - Current configuration
 - `PUT /api/config` - Update configuration
-- `POST /api/monitoring/start` - Start motion detection monitoring
+- `POST /api/monitoring/start` - Start monitoring
 - `POST /api/monitoring/stop` - Stop monitoring
 
-**Recording:**
-- `POST /api/recording/start` - Start manual recording
-- `POST /api/recording/stop` - Stop recording
-- `GET /api/recordings` - List all recordings
-- `GET /api/recordings/<filename>` - Download specific recording
-- `DELETE /api/recordings/<filename>` - Delete recording
+**Capture:**
+- `POST /api/snapshot` - Manual burst capture
 
-**Stills & Preview:**
-- `GET /api/preview` - Get current camera frame as JPEG (for region drawing)
-- `GET /api/stills` - List captured still images
-- `GET /api/stills/<filename>` - Download specific still image
-- `DELETE /api/stills/<filename>` - Delete still image
+**Stills:**
+- `GET /api/stills` - List captured images
+- `GET /api/stills/<filename>` - Download specific image
+- `DELETE /api/stills/<filename>` - Delete image
+- `DELETE /api/stills/all` - Delete all stills
 
 **Events:**
-- `GET /api/events` - Get motion detection events log
+- `GET /api/events` - Motion detection event log
 
-## File Structure
+**Archiving:**
+- `POST /api/archive` - Manually trigger archiving (runs daily automatically)
 
-```
-security-cam/
-├── api/
-│   ├── security-api.py      # Main API server
-│   └── config.json          # Configuration file
-├── web/
-│   ├── index.html           # Web interface
-│   ├── script.js            # Frontend JavaScript
-│   └── styles.css           # Styling
-├── recordings/              # Video recordings (auto-created)
-├── logs/                    # Motion event logs (auto-created)
-├── requirements.txt         # Python dependencies
-├── setup.sh                 # Installation script
-└── README.md                # This file
-```
+**Ownership:**
+- `POST /api/claim` - Claim configuration ownership
+- `POST /api/release` - Release ownership
+- `GET /api/owner` - Check current owner
+
+**Preview:**
+- `GET /api/preview` - Current camera frame (for region drawing)
 
 ## System Management
 
 ### Service Commands
 
 ```bash
-# Check service status
+# Check status
 sudo systemctl status security-cam
 
-# Start service
+# Start/stop/restart
 sudo systemctl start security-cam
-
-# Stop service
 sudo systemctl stop security-cam
-
-# Restart service
 sudo systemctl restart security-cam
 
-# View logs
+# View live logs
 sudo journalctl -u security-cam -f
 
 # Disable auto-start
@@ -225,220 +254,179 @@ sudo systemctl disable security-cam
 
 ### Manual Operation
 
-To run the API manually (for testing):
+For testing/development:
 
 ```bash
-cd /home/pi/dev/security-cam
-source venv/bin/activate
-cd api
+cd /home/pi/dev/security-cam/api
 python3 security-api.py
 ```
 
 ## Motion Detection Details
 
-The system uses **frame differencing** for motion detection:
+Uses **dual-stream motion detection**:
+- **Main stream** (1920x1080) - High-quality still captures
+- **Lores stream** (320x240) - Lightweight motion detection
 
-1. Each frame is converted to grayscale
-2. Gaussian blur is applied to reduce noise
-3. Difference from previous frame is calculated
-4. Pixels above sensitivity threshold are counted
-5. If count exceeds motion threshold, motion is detected
+**Algorithm:**
+1. Convert lores frame to grayscale
+2. Apply Gaussian blur to reduce noise
+3. Calculate difference from previous frame
+4. Threshold based on sensitivity setting
+5. Count changed pixels
+6. Apply detection region mask (if enabled)
+7. Trigger if total pixels > threshold
 
-### Tuning Motion Detection
-
-- **Higher threshold** = less sensitive (fewer false positives)
-- **Lower threshold** = more sensitive (catches smaller movements)
-- **Higher sensitivity** = requires bigger changes per pixel
-- **Lower sensitivity** = detects subtle changes
-
-Recommended starting values:
-- **Indoor, well-lit**: threshold=500, sensitivity=25
-- **Outdoor, varying light**: threshold=800, sensitivity=35
-- **High traffic area**: threshold=1000, sensitivity=30
+**Tuning Tips:**
+- **Threshold 50-100** - Good for focused detection regions
+- **Threshold 100-200** - Good for full-frame detection
+- **Sensitivity 15-25** - Standard daylight conditions  
+- **Sensitivity 20-30** - Low light conditions
+- Monitor stats logs every 30 seconds to see peak pixel counts
 
 ## Storage Management
 
-Recordings are stored in `recordings/` directory:
+### Disk Space
 
-- Each recording includes timestamp in filename
-- MP4 format with H.264 encoding
-- Timestamps burned into video
-
-To automatically delete old recordings, add a cron job:
-
+Check available space:
 ```bash
-crontab -e
+df -h /
 ```
 
-Add line to delete recordings older than 7 days:
+### Clean Old Stills
+
+Manual cleanup:
+```bash
+# Delete stills older than 7 days
+find /home/pi/dev/security-cam/stills -type f -mtime +7 -delete
+
+# Delete specific date folders
+rm -rf /home/pi/dev/security-cam/stills/2026-02-01
 ```
-0 2 * * * find /home/pi/dev/security-cam/recordings -name "*.mp4" -mtime +7 -delete
-```
+
+### Automatic Archiving
+
+Daily archiving runs at midnight via cron (set up by `setup-api.sh`):
+- Moves loose stills into date folders
+- Organizes by `YYYY-MM-DD/` format
 
 ## Troubleshooting
 
 ### Camera Not Detected
 
 ```bash
-# Check if camera is enabled
+# Check camera
 vcgencmd get_camera
-
 # Should show: supported=1 detected=1
 
-# If not, edit /boot/config.txt
-sudo nano /boot/config.txt
-
-# Ensure these lines exist:
-# start_x=1
-# gpu_mem=128
-
-# Reboot
-sudo reboot
+# Check libcamera
+libcamera-hello --list-cameras
 ```
 
 ### Service Won't Start
 
 ```bash
-# Check service logs
-sudo journalctl -u security-cam -n 50
+# Check logs
+sudo journalctl -u security-cam -n 100
 
-# Check if port 5000 is in use
-sudo netstat -tulpn | grep 5000
+# Check Python syntax
+cd /home/pi/dev/security-cam/api
+python3 -m py_compile security-api.py
 
-# Test API manually
-cd /home/pi/dev/security-cam
-source venv/bin/activate
-cd api
+# Test manually
 python3 security-api.py
 ```
 
-### Web Interface Not Loading
+### Web Interface Errors
 
 ```bash
-# Check nginx status
+# Check nginx
 sudo systemctl status nginx
-
-# Check nginx configuration
 sudo nginx -t
 
-# View nginx error logs
+# View nginx logs
 sudo tail -f /var/log/nginx/error.log
+
+# Test API directly
+curl http://localhost:5000/api/status
 ```
 
-### Motion Detection Too Sensitive
-
-Lower the sensitivity in settings:
-- Increase motion threshold (e.g., 1000+)
-- Increase motion sensitivity value (e.g., 35+)
-
-### Motion Detection Missing Events
-
-Increase sensitivity:
-- Decrease motion threshold (e.g., 300)
-- Decrease motion sensitivity value (e.g., 15)
-
-## Network Access
-
-### Local Network Access
-
-The web interface is accessible from any device on your local network at:
-```
-http://<raspberry-pi-ip>
-```
-
-Find your Pi's IP address:
-```bash
-hostname -I
-```
-
-### Remote Access (Optional)
-
-For remote access, you can:
-
-1. **Port Forwarding** - Forward port 80 on your router to the Pi
-2. **VPN** - Set up a VPN server (WireGuard/OpenVPN)
-3. **Tailscale** - Use Tailscale for easy secure access
-4. **ngrok** - Use ngrok for temporary access
-
-⚠️ **Security Note**: If exposing to the internet, add authentication!
-
-## Backup
-
-To backup your system:
+### Disk Full
 
 ```bash
-# Backup configuration
-cp api/config.json config.json.backup
+# Check space
+df -h /
 
-# Backup motion events
-cp logs/motion_events.json motion_events.backup.json
+# Clean old stills
+find /home/pi/dev/security-cam/stills -type d -name "2026-*" -mtime +7 -exec rm -rf {} \;
+```
 
-# Backup important recordings
-cp recordings/motion_*.mp4 /path/to/backup/
+### Motion Detection Issues
+
+**Too many false positives:**
+- Increase threshold (100+)
+- Draw detection regions to focus on important areas
+- Avoid regions with trees, clouds, reflections
+
+**Missing motion events:**
+- Lower threshold (50-75)
+- Lower sensitivity (15-20)
+- Check stats logs for peak pixel counts
+
+## Development Setup
+
+For SSH and remote development, see [SSH Development Setup Guide](./SSH_DEVELOPMENT_SETUP.md)
+
+Covers:
+- SSH key authentication
+- VS Code Remote development
+- File syncing
+- Development server setup
+
+## File Structure
+
+```
+security-cam/
+├── api/
+│   ├── security-api.py       # Main API server
+│   └── config.json           # Configuration
+├── web/
+│   ├── index.html            # Web interface
+│   ├── script.js             # Frontend JavaScript
+│   └── styles.css            # Styling
+├── stills/                   # Still images (organized by date)
+├── logs/                     # Motion event logs
+├── setup-first-time.sh       # Initial system setup
+├── setup-network.sh          # Network configuration
+├── setup-api.sh              # API service setup
+├── setup-web.sh              # Web server setup
+├── requirements.txt          # Python dependencies
+├── NETWORK_CONFIG.md         # Network setup guide
+├── SSH_DEVELOPMENT_SETUP.md  # Development guide
+└── README.md                 # This file
 ```
 
 ## Performance
 
-Typical resource usage:
-- **CPU**: 5-15% (when monitoring)
+Typical resource usage on Pi 4:
+- **CPU**: 5-10% idle, 15-25% during capture
 - **RAM**: ~200MB
-- **Storage**: ~50MB per minute of video (1080p)
+- **Storage**: ~200-800KB per JPEG (varies with scene complexity)
 
-For better performance:
-- Lower resolution in config (e.g., [1280, 720])
-- Reduce framerate (e.g., 15 or 20 FPS)
-- Use motion detection instead of continuous recording
-
-## Development
-
-### Adding Features
-
-The API is built with Flask and is easy to extend. Key files:
-
-- **security-api.py**: Add new endpoints or modify detection logic
-- **script.js**: Add new UI features or API calls
-- **styles.css**: Modify appearance
-
-After changes, restart the service:
-```bash
-sudo systemctl restart security-cam
-```
-
-### Testing
-
-Test the API endpoints with curl:
-
-```bash
-# Get status
-curl http://localhost:5000/api/status
-
-# Start monitoring
-curl -X POST http://localhost:5000/api/monitoring/start
-
-# Get events
-curl http://localhost:5000/api/events
-```
-
-## License
-
-MIT License - Feel free to use and modify for your needs.
-
-## Support
-
-For issues or questions:
-1. Check the Troubleshooting section
-2. Review service logs: `sudo journalctl -u security-cam -f`
-3. Check camera status: `vcgencmd get_camera`
-4. Test manually: Run API script directly to see errors
+Calibration loop runs every 60 seconds, captures take ~300ms per frame.
 
 ## Credits
 
 Built with:
-- Flask - Web framework
-- OpenCV - Computer vision
-- Picamera2 - Raspberry Pi camera library
-- Nginx - Web server
+- **Flask** - Web framework
+- **picamera2** - Raspberry Pi Camera library  
+- **OpenCV** - Computer vision
+- **Nginx** - Web server
+- **libcamera** - Camera stack
+
+## License
+
+MIT License - Feel free to use and modify.
 
 ---
 
-**Happy Securing! 🔒📹**
+**Happy Monitoring! 🔒📸**
