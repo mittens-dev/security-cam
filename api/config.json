@@ -1,10 +1,10 @@
 {
-  "motion_threshold": 10,
-  "motion_sensitivity": 5,
+  "motion_threshold": 50,
+  "motion_sensitivity": 20,
   "capture_on_motion": true,
-  "burst_count": 5,
-  "burst_interval": 0.5,
-  "cooldown_seconds": 5,
+  "burst_count": 4,
+  "burst_interval": 0.3,
+  "cooldown_seconds": 3,
   "detection_regions": [
     [
       24,
@@ -29,6 +29,18 @@
       990,
       589,
       1067
+    ],
+    [
+      644,
+      1012,
+      1122,
+      1103
+    ],
+    [
+      265,
+      1014,
+      450,
+      1120
     ]
   ],
   "use_regions": true,
@@ -69,5 +81,6 @@
     "saturation": 0.6,
     "still_contrast": 0.6,
     "still_saturation": 0.6
-  }
+  },
+  "deduplicate_burst": false
 }

@@ -27,6 +27,7 @@ const elements = {
     burstInterval: document.getElementById('burstInterval'),
     cooldownSeconds: document.getElementById('cooldownSeconds'),
     saveConfig: document.getElementById('saveConfig'),
+    refreshConfig: document.getElementById('refreshConfig'),
     refreshEvents: document.getElementById('refreshEvents'),
     eventsList: document.getElementById('eventsList'),
     eventsCount: document.getElementById('eventsCount'),
@@ -123,6 +124,17 @@ function updateConfigDisplay(cfg) {
     elements.burstCount.value = cfg.burst_count || 5;
     elements.burstInterval.value = cfg.burst_interval || 0.5;
     elements.cooldownSeconds.value = cfg.cooldown_seconds || 5;
+    
+    // Update region detection toggle
+    if (cfg.use_regions !== undefined) {
+        elements.useRegions.checked = cfg.use_regions;
+    }
+    
+    // Update calibration regions toggle
+    if (cfg.use_calibration_regions !== undefined) {
+        elements.useCalibrationRegions.checked = cfg.use_calibration_regions;
+    }
+    
     state.config = cfg;
     
     // Update regions count on main page
@@ -257,6 +269,13 @@ elements.saveConfig.addEventListener('click', async () => {
         };
         await updateConfig(cfg);
         showAlert('Settings saved', 'success');
+    } catch (e) { console.error(e); }
+});
+
+elements.refreshConfig.addEventListener('click', async () => {
+    try {
+        await loadStatus();
+        showAlert('Settings refreshed', 'success');
     } catch (e) { console.error(e); }
 });
 

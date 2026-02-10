@@ -95,6 +95,7 @@
 
                 <div class="setting-group">
                     <button id="saveConfig" class="btn btn-primary">💾 Save Settings</button>
+                    <button id="refreshConfig" class="btn btn-secondary" style="margin-left:8px">🔄 Refresh Settings</button>
                 </div>
             </div>
         </section>
@@ -252,6 +253,19 @@
                             <button id="forceNight" class="btn btn-profile">🌙 Night</button>
                         </div>
                         <p class="preview-info" style="margin-top: 0.5rem;">Forced profile will be overridden at next auto-calibration cycle</p>
+
+                        <!-- Ownership Controls -->
+                        <div class="ownership-controls" style="margin-top: 1rem;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span class="info-label">Config Owner:</span>
+                                <span id="ownerStatus" class="detail-value">—</span>
+                            </div>
+                            <div style="margin-top:0.5rem; display:flex; gap:8px;">
+                                <button id="claimOwner" class="btn btn-secondary btn-small">➕ Claim</button>
+                                <button id="releaseOwner" class="btn btn-secondary btn-small">➖ Release</button>
+                                <button id="hardRefresh" class="btn btn-secondary btn-small">🔁 Hard Refresh</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

@@ -371,6 +371,10 @@ def capture_burst(count=None, interval=None):
         'NIGHT': 'Ni'
     }
     profile_suffix = profile_suffixes.get(state.get('active_profile'), 'XX')
+    
+    # Get current luminance for filename
+    luminance = state.get('last_luminance', 0)
+    lum_str = f"L{luminance:.1f}"
 
     for i in range(count):
         try:
@@ -380,7 +384,7 @@ def capture_burst(count=None, interval=None):
             img = frame_to_image(frame)
 
             # Save pure ISP output — no post-processing
-            filename = f"motion_{ts_base}_burst{i+1}_{profile_suffix}.jpg"
+            filename = f"motion_{ts_base}_burst{i+1}_{profile_suffix}_{lum_str}.jpg"
             filepath = STILLS_DIR / filename
             img.save(str(filepath), 'JPEG', quality=90)
             filenames.append(filename)
