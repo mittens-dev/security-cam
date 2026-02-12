@@ -158,10 +158,10 @@ CAMERA_PROFILES = {
 # # Below THRESHOLD_DUSK_DARK = NIGHT (artificial lighting, very low light)
 
 
-THRESHOLD_DAY_BRIGHT = 160  # Full sun, bright clouds, reflections
-THRESHOLD_DAY = 120         # Normal daylight (most of the day)
-THRESHOLD_DUSK_BRIGHT = 80 # Bright dusk, overcast, early golden hour
-THRESHOLD_DUSK_DARK = 30    # True dusk (sky bright, ground dark, colour shifts)
+THRESHOLD_DAY_BRIGHT = 100  # Full sun, bright clouds, reflections
+THRESHOLD_DAY = 50         # Normal daylight (most of the day)
+THRESHOLD_DUSK_BRIGHT = 30 # Bright dusk, overcast, early golden hour
+THRESHOLD_DUSK_DARK = 15    # True dusk (sky bright, ground dark, colour shifts)
 # Below THRESHOLD_DUSK_DARK = NIGHT (artificial lighting, very low light)
 
 # Legacy threshold names for compatibility

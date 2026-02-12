@@ -4,7 +4,7 @@
   "capture_on_motion": true,
   "burst_count": 4,
   "burst_interval": 0.3,
-  "cooldown_seconds": 3,
+  "cooldown_seconds": 2,
   "detection_regions": [
     [
       24,
@@ -50,24 +50,6 @@
       890,
       2295,
       1287
-    ],
-    [
-      1894,
-      642,
-      2292,
-      876
-    ],
-    [
-      24,
-      24,
-      400,
-      619
-    ],
-    [
-      1610,
-      792,
-      1800,
-      882
     ]
   ],
   "use_calibration_regions": true,
