@@ -115,6 +115,8 @@ function updateStatusDisplay(status) {
     elements.startMonitoring.disabled = status.monitoring;
     elements.stopMonitoring.disabled = !status.monitoring;
     elements.takeSnapshot.disabled = !status.monitoring || status.capturing;
+    
+    state.monitoring = status.monitoring;
 }
 
 function updateConfigDisplay(cfg) {
@@ -125,25 +127,58 @@ function updateConfigDisplay(cfg) {
     elements.burstInterval.value = cfg.burst_interval || 0.5;
     elements.cooldownSeconds.value = cfg.cooldown_seconds || 5;
     
-    // Update region detection toggle
-    if (cfg.use_regions !== undefined) {
-        elements.useRegions.checked = cfg.use_regions;
-    }
-    
     // Update calibration regions toggle
     if (cfg.use_calibration_regions !== undefined) {
         elements.useCalibrationRegions.checked = cfg.use_calibration_regions;
     }
     
-    state.config = cfg;
+    // Preserve locally-saved zone data if the server returns empty arrays
+    // (handles case where API hasn't been restarted with zone support yet)
+    const zoneKeys = ['zone_a', 'zone_b', 'zone_c'];
+    const preservedZones = {};
+    zoneKeys.forEach(k => {
+        if (state.config[k]?.length === 4) preservedZones[k] = state.config[k];
+    });
+    
+    // Preserve zone_detection_enabled if server doesn't know about it
+    const preservedZoneEnabled = state.config.zone_detection_enabled;
+    
+    // Merge server config into local (preserves keys not in server response)
+    state.config = { ...state.config, ...cfg };
+    
+    // Restore zone data if server returned empty but we had local data
+    zoneKeys.forEach(k => {
+        if (preservedZones[k] && (!state.config[k] || state.config[k].length === 0)) {
+            state.config[k] = preservedZones[k];
+        }
+    });
+    // Restore zone_detection_enabled if server didn't include it
+    if (cfg.zone_detection_enabled === undefined && preservedZoneEnabled !== undefined) {
+        state.config.zone_detection_enabled = preservedZoneEnabled;
+    }
+    
+    // Detection mode checkboxes from merged config
+    const useRegions = state.config.use_regions || false;
+    const zoneEnabled = state.config.zone_detection_enabled || false;
+    elements.useRegions.checked = useRegions;
+    document.getElementById('zoneDetectionEnabled').checked = zoneEnabled;
+    
+    // Ensure at least one detection mode is active in the UI
+    if (!useRegions && !zoneEnabled) {
+        state.config.use_regions = true;
+        elements.useRegions.checked = true;
+    }
     
     // Update regions count on main page
-    const regionCount = cfg.detection_regions?.length || 0;
+    const regionCount = state.config.detection_regions?.length || 0;
     elements.regionsCount.textContent = `${regionCount} region${regionCount !== 1 ? 's' : ''} defined`;
     
     // Update calibration regions count on main page
-    const calCount = cfg.calibration_regions?.length || 0;
+    const calCount = state.config.calibration_regions?.length || 0;
     elements.calibrationRegionsCount.textContent = `${calCount} region${calCount !== 1 ? 's' : ''} defined`;
+    
+    // Update corner zone status
+    updateZoneStatusDisplay();
 }
 
 function displayEvents(events) {
@@ -177,16 +212,34 @@ function displayStills(stills) {
         return;
     }
 
-    elements.stillsCount.textContent = `${stills.length} still${stills.length !== 1 ? 's' : ''}`;
+    // Sort: corners first, then by date (most recent first)
+    const sortedStills = [...stills].sort((a, b) => {
+        const aIsCorner = a.filename.startsWith('corner_');
+        const bIsCorner = b.filename.startsWith('corner_');
+        
+        // If types differ, corners come first
+        if (aIsCorner !== bIsCorner) {
+            return aIsCorner ? -1 : 1;
+        }
+        
+        // Same type, sort by date descending (most recent first)
+        return new Date(b.created) - new Date(a.created);
+    });
+
+    elements.stillsCount.textContent = `${sortedStills.length} still${sortedStills.length !== 1 ? 's' : ''}`;
 
     let html = '';
-    stills.forEach(still => {
+    sortedStills.forEach(still => {
         const date = new Date(still.created);
         const sizeKB = (still.size / 1024).toFixed(0);
+        const isCornerDetection = still.filename.startsWith('corner_');
+        const badge = isCornerDetection ? '<span class="corner-badge">🎯 Corner</span>' : '';
+        
         html += `
-            <div class="still-card" data-filename="${still.filename}">
+            <div class="still-card ${isCornerDetection ? 'corner-still' : ''}" data-filename="${still.filename}">
                 <div class="still-thumb" onclick="openLightbox('${still.filename}')">
                     <img src="${still.url}" alt="${still.filename}" loading="lazy" />
+                    ${badge}
                 </div>
                 <div class="still-info">
                     <div class="still-name">${still.filename}</div>
@@ -379,7 +432,14 @@ async function openRegionDrawing(mode = 'detection') {
         updateModalMode();
 
         const response = await fetch(`${API_BASE}/preview`);
-        if (!response.ok) throw new Error('Failed to fetch preview');
+        
+        if (!response.ok) {
+            if (response.status === 400) {
+                throw new Error('Start monitoring first to load camera preview');
+            } else {
+                throw new Error(`Failed to fetch preview (HTTP ${response.status})`);
+            }
+        }
 
         const blob = await response.blob();
         const img = new Image();
@@ -414,7 +474,7 @@ async function openRegionDrawing(mode = 'detection') {
         img.src = URL.createObjectURL(blob);
     } catch (e) {
         console.error(e);
-        showAlert('Failed to load preview', 'error');
+        showAlert(e.message || 'Failed to load preview', 'error');
     }
 }
 
@@ -487,8 +547,10 @@ function setupRegionDrawing() {
     canvas.addEventListener('mousedown', (e) => {
         if (!regionDrawing.imageLoaded) return;
         const rect = canvas.getBoundingClientRect();
-        startX = e.clientX - rect.left;
-        startY = e.clientY - rect.top;
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        startX = (e.clientX - rect.left) * scaleX;
+        startY = (e.clientY - rect.top) * scaleY;
         regionDrawing.isDrawing = true;
         regionDrawing.currentRegion = { startX, startY, endX: startX, endY: startY };
     });
@@ -496,8 +558,10 @@ function setupRegionDrawing() {
     canvas.addEventListener('mousemove', (e) => {
         if (!regionDrawing.isDrawing) return;
         const rect = canvas.getBoundingClientRect();
-        regionDrawing.currentRegion.endX = e.clientX - rect.left;
-        regionDrawing.currentRegion.endY = e.clientY - rect.top;
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        regionDrawing.currentRegion.endX = (e.clientX - rect.left) * scaleX;
+        regionDrawing.currentRegion.endY = (e.clientY - rect.top) * scaleY;
         drawRegions();
     });
 
@@ -802,6 +866,346 @@ function setupLightbox() {
     });
 }
 
+// ==================== CORNER ZONE DRAWING ====================
+
+const cornerZoneDrawing = {
+    imageLoaded: false,
+    baseImage: null,
+    canvasScale: 1,
+    isDrawing: false,
+    currentZone: 'a', // 'a', 'b', or 'c'
+    currentRect: null,
+    zones: { a: null, b: null, c: null }
+};
+
+async function getZoneStatus() {
+    try {
+        return await apiCall('/zone-status');
+    } catch (e) {
+        console.error('Failed to get zone status:', e);
+        return null;
+    }
+}
+
+async function openCornerZoneDrawing() {
+    try {
+        const response = await fetch(`${API_BASE}/preview`);
+        
+        if (!response.ok) {
+            if (response.status === 400) {
+                throw new Error('Start monitoring first to load camera preview');
+            } else {
+                throw new Error(`Failed to fetch preview (HTTP ${response.status})`);
+            }
+        }
+
+        const blob = await response.blob();
+        const img = new Image();
+
+        img.onload = () => {
+            const canvas = document.getElementById('cornerZoneCanvas');
+            const ctx = canvas.getContext('2d');
+
+            const maxWidth = 1200;
+            const maxHeight = 800;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > maxWidth) { height = (maxWidth / width) * height; width = maxWidth; }
+            if (height > maxHeight) { width = (maxHeight / height) * width; height = maxHeight; }
+
+            canvas.width = width;
+            canvas.height = height;
+            cornerZoneDrawing.canvasScale = width / img.width;
+            cornerZoneDrawing.baseImage = img;
+
+            ctx.drawImage(img, 0, 0, width, height);
+            cornerZoneDrawing.imageLoaded = true;
+            
+            // Load existing zones from config
+            cornerZoneDrawing.zones.a = state.config.zone_a?.length === 4 ? state.config.zone_a : null;
+            cornerZoneDrawing.zones.b = state.config.zone_b?.length === 4 ? state.config.zone_b : null;
+            cornerZoneDrawing.zones.c = state.config.zone_c?.length === 4 ? state.config.zone_c : null;
+            
+            updateCornerZoneDisplay();
+            drawCornerZones();
+
+            document.getElementById('cornerZoneModal').style.display = 'flex';
+        };
+        img.src = URL.createObjectURL(blob);
+    } catch (e) {
+        console.error(e);
+        showAlert(e.message || 'Failed to load preview', 'error');
+    }
+}
+
+function setCurrentZone(zone) {
+    cornerZoneDrawing.currentZone = zone;
+    document.querySelectorAll('.zone-step-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.zone === zone);
+    });
+    const indicator = document.getElementById('currentZoneIndicator');
+    indicator.textContent = zone.toUpperCase();
+    indicator.className = `zone-badge zone-${zone}`;
+}
+
+function drawCornerZones() {
+    if (!cornerZoneDrawing.imageLoaded || !cornerZoneDrawing.baseImage) return;
+
+    const canvas = document.getElementById('cornerZoneCanvas');
+    const ctx = canvas.getContext('2d');
+    const scale = cornerZoneDrawing.canvasScale;
+
+    ctx.drawImage(cornerZoneDrawing.baseImage, 0, 0, canvas.width, canvas.height);
+
+    const zoneColors = {
+        a: { stroke: '#00ff00', fill: 'rgba(0, 255, 0, 0.2)', label: 'A' },
+        b: { stroke: '#ffaa00', fill: 'rgba(255, 170, 0, 0.2)', label: 'B' },
+        c: { stroke: '#ff0000', fill: 'rgba(255, 0, 0, 0.2)', label: 'C' }
+    };
+
+    // Draw existing zones
+    ['a', 'b', 'c'].forEach(zone => {
+        const coords = cornerZoneDrawing.zones[zone];
+        if (coords && coords.length === 4) {
+            const [x1, y1, x2, y2] = coords;
+            const x = x1 * scale, y = y1 * scale;
+            const w = (x2 - x1) * scale, h = (y2 - y1) * scale;
+
+            const color = zoneColors[zone];
+            ctx.strokeStyle = color.stroke;
+            ctx.lineWidth = 3;
+            ctx.fillStyle = color.fill;
+
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillStyle = color.stroke;
+            ctx.font = 'bold 24px sans-serif';
+            ctx.fillText(color.label, x + 10, y + 30);
+        }
+    });
+
+    // Draw current drawing rectangle
+    if (cornerZoneDrawing.currentRect) {
+        const color = zoneColors[cornerZoneDrawing.currentZone];
+        ctx.strokeStyle = color.stroke;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        const { startX, startY, endX, endY } = cornerZoneDrawing.currentRect;
+        ctx.strokeRect(startX, startY, endX - startX, endY - startY);
+        ctx.setLineDash([]);
+    }
+}
+
+function setupCornerZoneDrawing() {
+    const canvas = document.getElementById('cornerZoneCanvas');
+    let startX, startY;
+
+    canvas.addEventListener('mousedown', (e) => {
+        if (!cornerZoneDrawing.imageLoaded) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        startX = (e.clientX - rect.left) * scaleX;
+        startY = (e.clientY - rect.top) * scaleY;
+        cornerZoneDrawing.isDrawing = true;
+        cornerZoneDrawing.currentRect = { startX, startY, endX: startX, endY: startY };
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (!cornerZoneDrawing.isDrawing) return;
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        cornerZoneDrawing.currentRect.endX = (e.clientX - rect.left) * scaleX;
+        cornerZoneDrawing.currentRect.endY = (e.clientY - rect.top) * scaleY;
+        drawCornerZones();
+    });
+
+    canvas.addEventListener('mouseup', () => {
+        if (!cornerZoneDrawing.isDrawing) return;
+        cornerZoneDrawing.isDrawing = false;
+
+        const { startX, startY, endX, endY } = cornerZoneDrawing.currentRect;
+        const scale = cornerZoneDrawing.canvasScale;
+
+        const x1 = Math.floor(Math.min(startX, endX) / scale);
+        const y1 = Math.floor(Math.min(startY, endY) / scale);
+        const x2 = Math.floor(Math.max(startX, endX) / scale);
+        const y2 = Math.floor(Math.max(startY, endY) / scale);
+
+        if (Math.abs(x2 - x1) > 5 && Math.abs(y2 - y1) > 5) {
+            cornerZoneDrawing.zones[cornerZoneDrawing.currentZone] = [x1, y1, x2, y2];
+            updateCornerZoneDisplay();
+            
+            // Auto-advance to next zone
+            if (cornerZoneDrawing.currentZone === 'a') {
+                setCurrentZone('b');
+            } else if (cornerZoneDrawing.currentZone === 'b') {
+                setCurrentZone('c');
+            }
+        }
+        
+        cornerZoneDrawing.currentRect = null;
+        drawCornerZones();
+    });
+
+    // Zone selection buttons
+    document.getElementById('drawZoneA').addEventListener('click', () => setCurrentZone('a'));
+    document.getElementById('drawZoneB').addEventListener('click', () => setCurrentZone('b'));
+    document.getElementById('drawZoneC').addEventListener('click', () => setCurrentZone('c'));
+
+    // Clear zone buttons
+    document.querySelectorAll('.btn-clear-zone').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const zone = btn.dataset.zone;
+            cornerZoneDrawing.zones[zone] = null;
+            updateCornerZoneDisplay();
+            drawCornerZones();
+        });
+    });
+
+    // Save and cancel
+    document.getElementById('saveCornerZones').addEventListener('click', saveCornerZonesToConfig);
+    document.getElementById('cancelCornerZones').addEventListener('click', closeCornerZoneModal);
+}
+
+function updateCornerZoneDisplay() {
+    ['a', 'b', 'c'].forEach(zone => {
+        const coords = cornerZoneDrawing.zones[zone];
+        const coordsEl = document.getElementById(`zone${zone.toUpperCase()}Coords`);
+        if (coords && coords.length === 4) {
+            coordsEl.textContent = `[${coords[0]}, ${coords[1]}, ${coords[2]}, ${coords[3]}]`;
+            coordsEl.style.color = '#48bb78';
+        } else {
+            coordsEl.textContent = 'Not defined';
+            coordsEl.style.color = '#a0aec0';
+        }
+    });
+}
+
+async function saveCornerZonesToConfig() {
+    try {
+        const frameInterval = parseFloat(document.getElementById('zoneFrameInterval').value) || 0.15;
+        const cycleDuration = parseFloat(document.getElementById('zoneCycleDuration').value) || 5.0;
+        
+        const cfg = {
+            zone_a: cornerZoneDrawing.zones.a || [],
+            zone_b: cornerZoneDrawing.zones.b || [],
+            zone_c: cornerZoneDrawing.zones.c || [],
+            zone_frame_interval: frameInterval,
+            zone_cycle_duration: cycleDuration
+        };
+        
+        const response = await apiCall('/config', 'PUT', cfg);
+        if (response) {
+            state.config = { ...state.config, ...cfg };
+            updateZoneStatusDisplay();
+            updateDetectionModeHighlight();
+            showAlert('Corner zones saved!', 'success');
+            closeCornerZoneModal();
+        }
+    } catch (e) {
+        console.error(e);
+        showAlert('Failed to save zones', 'error');
+    }
+}
+
+function closeCornerZoneModal() {
+    document.getElementById('cornerZoneModal').style.display = 'none';
+    cornerZoneDrawing.imageLoaded = false;
+    cornerZoneDrawing.currentRect = null;
+    cornerZoneDrawing.isDrawing = false;
+}
+
+function clearAllCornerZones() {
+    if (confirm('Clear all corner detection zones?')) {
+        cornerZoneDrawing.zones = { a: null, b: null, c: null };
+        // Save clearance to server
+        apiCall('/config', 'PUT', { zone_a: [], zone_b: [], zone_c: [] }).then(() => {
+            state.config.zone_a = [];
+            state.config.zone_b = [];
+            state.config.zone_c = [];
+            updateZoneStatusDisplay();
+            showAlert('Corner zones cleared', 'success');
+        });
+        // Update modal display if open
+        if (cornerZoneDrawing.imageLoaded) {
+            updateCornerZoneDisplay();
+            drawCornerZones();
+        }
+    }
+}
+
+function updateZoneStatusDisplay() {
+    // Zone defined/not-defined badges on main page
+    const zoneA = state.config.zone_a;
+    const zoneB = state.config.zone_b;
+    const zoneC = state.config.zone_c;
+    
+    document.getElementById('zoneAStatus').textContent = zoneA?.length === 4 ? 'Defined ✓' : 'Not defined';
+    document.getElementById('zoneBStatus').textContent = zoneB?.length === 4 ? 'Defined ✓' : 'Not defined';
+    document.getElementById('zoneCStatus').textContent = zoneC?.length === 4 ? 'Defined ✓' : 'Not defined';
+    
+    document.getElementById('zoneABadge').style.opacity = zoneA?.length === 4 ? '1' : '0.5';
+    document.getElementById('zoneBBadge').style.opacity = zoneB?.length === 4 ? '1' : '0.5';
+    document.getElementById('zoneCBadge').style.opacity = zoneC?.length === 4 ? '1' : '0.5';
+    
+    if (state.config.zone_frame_interval !== undefined) {
+        document.getElementById('zoneFrameInterval').value = state.config.zone_frame_interval;
+    }
+    if (state.config.zone_cycle_duration !== undefined) {
+        document.getElementById('zoneCycleDuration').value = state.config.zone_cycle_duration;
+    }
+    
+    updateDetectionModeHighlight();
+    
+    // Show/hide live status
+    const liveStatus = document.getElementById('zoneLiveStatus');
+    const zoneEnabled = state.config.zone_detection_enabled || false;
+    if (zoneEnabled && state.monitoring) {
+        liveStatus.style.display = 'block';
+        updateLiveZoneStatus();
+    } else {
+        liveStatus.style.display = 'none';
+    }
+}
+
+function updateDetectionModeHighlight() {
+    const regionsLabel = document.querySelector('#useRegions')?.closest('.detection-mode-label');
+    const zonesLabel = document.querySelector('#zoneDetectionEnabled')?.closest('.detection-mode-label');
+    
+    if (regionsLabel) {
+        regionsLabel.classList.toggle('active-mode', state.config.use_regions || false);
+    }
+    if (zonesLabel) {
+        zonesLabel.classList.toggle('active-mode', state.config.zone_detection_enabled || false);
+    }
+}
+
+async function updateLiveZoneStatus() {
+    const zoneStatus = await getZoneStatus();
+    if (!zoneStatus) return;
+    
+    document.getElementById('zoneATagged').textContent = zoneStatus.zone_a_tagged ? '✓ Tagged' : '○ Waiting';
+    document.getElementById('zoneBTagged').textContent = zoneStatus.zone_b_tagged ? '✓ Tagged' : '○ Waiting';
+    document.getElementById('zoneCTagged').textContent = zoneStatus.zone_c_tagged ? '✓ Tagged' : '○ Waiting';
+    
+    document.getElementById('zoneATagged').style.color = zoneStatus.zone_a_tagged ? '#48bb78' : '#a0aec0';
+    document.getElementById('zoneBTagged').style.color = zoneStatus.zone_b_tagged ? '#48bb78' : '#a0aec0';
+    document.getElementById('zoneCTagged').style.color = zoneStatus.zone_c_tagged ? '#48bb78' : '#a0aec0';
+    
+    if (zoneStatus.cycle_active) {
+        const elapsed = Math.floor(zoneStatus.cycle_elapsed);
+        const total = zoneStatus.cycle_duration || 5;
+        document.getElementById('zoneCycleStatus').textContent = `Active (${elapsed}/${total}s)`;
+        document.getElementById('zoneCycleStatus').style.color = '#ffa500';
+    } else {
+        document.getElementById('zoneCycleStatus').textContent = 'Idle';
+        document.getElementById('zoneCycleStatus').style.color = '#a0aec0';
+    }
+}
+
 // ==================== EVENT LISTENERS ====================
 
 function setupEventListeners() {
@@ -835,8 +1239,22 @@ function setupEventListeners() {
 
     if (elements.useRegions) {
         elements.useRegions.addEventListener('change', async () => {
-            await apiCall('/config', 'PUT', { use_regions: elements.useRegions.checked });
-            state.config.use_regions = elements.useRegions.checked;
+            const checked = elements.useRegions.checked;
+            // OR toggle: if enabling regions, disable corner detection
+            if (checked) {
+                document.getElementById('zoneDetectionEnabled').checked = false;
+                await apiCall('/config', 'PUT', { use_regions: true, zone_detection_enabled: false });
+                state.config.use_regions = true;
+                state.config.zone_detection_enabled = false;
+            } else {
+                // Can't have both off - switch to corner detection
+                document.getElementById('zoneDetectionEnabled').checked = true;
+                await apiCall('/config', 'PUT', { use_regions: false, zone_detection_enabled: true });
+                state.config.use_regions = false;
+                state.config.zone_detection_enabled = true;
+            }
+            updateDetectionModeHighlight();
+            updateZoneStatusDisplay();
         });
     }
 
@@ -844,6 +1262,57 @@ function setupEventListeners() {
         elements.useCalibrationRegions.addEventListener('change', async () => {
             await apiCall('/config', 'PUT', { use_calibration_regions: elements.useCalibrationRegions.checked });
             state.config.use_calibration_regions = elements.useCalibrationRegions.checked;
+        });
+    }
+
+    // Corner zone detection
+    const drawCornerZonesBtn = document.getElementById('drawCornerZones');
+    const clearCornerZonesBtn = document.getElementById('clearCornerZones');
+    const zoneDetectionEnabled = document.getElementById('zoneDetectionEnabled');
+    const zoneFrameInterval = document.getElementById('zoneFrameInterval');
+    const zoneCycleDuration = document.getElementById('zoneCycleDuration');
+    
+    if (drawCornerZonesBtn) drawCornerZonesBtn.addEventListener('click', openCornerZoneDrawing);
+    if (clearCornerZonesBtn) clearCornerZonesBtn.addEventListener('click', clearAllCornerZones);
+    
+    if (zoneDetectionEnabled) {
+        zoneDetectionEnabled.addEventListener('change', async () => {
+            const checked = zoneDetectionEnabled.checked;
+            // OR toggle: if enabling corner detection, disable regions
+            if (checked) {
+                elements.useRegions.checked = false;
+                await apiCall('/config', 'PUT', { zone_detection_enabled: true, use_regions: false });
+                state.config.zone_detection_enabled = true;
+                state.config.use_regions = false;
+            } else {
+                // Can't have both off - switch to region detection
+                elements.useRegions.checked = true;
+                await apiCall('/config', 'PUT', { zone_detection_enabled: false, use_regions: true });
+                state.config.zone_detection_enabled = false;
+                state.config.use_regions = true;
+            }
+            updateDetectionModeHighlight();
+            updateZoneStatusDisplay();
+        });
+    }
+    
+    if (zoneFrameInterval) {
+        zoneFrameInterval.addEventListener('change', async () => {
+            const val = parseFloat(zoneFrameInterval.value);
+            if (val >= 0.1 && val <= 0.5) {
+                await apiCall('/config', 'PUT', { zone_frame_interval: val });
+                state.config.zone_frame_interval = val;
+            }
+        });
+    }
+    
+    if (zoneCycleDuration) {
+        zoneCycleDuration.addEventListener('change', async () => {
+            const val = parseFloat(zoneCycleDuration.value);
+            if (val >= 3 && val <= 10) {
+                await apiCall('/config', 'PUT', { zone_cycle_duration: val });
+                state.config.zone_cycle_duration = val;
+            }
         });
     }
 
@@ -858,6 +1327,7 @@ async function initialize() {
 
     setupEventListeners();
     setupRegionDrawing();
+    setupCornerZoneDrawing();
 
     await loadStatus();
     await loadEvents();
@@ -873,17 +1343,34 @@ async function initialize() {
         const count = regionDrawing.calibrationRegions.length;
         elements.calibrationRegionsCount.textContent = `${count} region${count !== 1 ? 's' : ''} defined`;
     }
-    if (state.config.use_regions !== undefined) {
-        elements.useRegions.checked = state.config.use_regions;
-    }
     if (state.config.use_calibration_regions !== undefined) {
         elements.useCalibrationRegions.checked = state.config.use_calibration_regions;
     }
+    
+    // Ensure exactly one detection mode is active
+    // Default to normal regions on fresh load (if neither is explicitly set)
+    if (!state.config.zone_detection_enabled && !state.config.use_regions) {
+        state.config.use_regions = true;
+        elements.useRegions.checked = true;
+        // Save this default so it persists
+        apiCall('/config', 'PUT', { use_regions: true, zone_detection_enabled: false });
+    }
+    
+    // Initialize corner zone display and mode highlight
+    updateZoneStatusDisplay();
+    updateDetectionModeHighlight();
 
     // Auto-refresh
     setInterval(loadStatus, 5000);
     setInterval(loadEvents, 10000);
     setInterval(loadStills, 15000);
+    
+    // Auto-refresh zone status if enabled
+    setInterval(() => {
+        if (state.config.zone_detection_enabled && state.monitoring) {
+            updateLiveZoneStatus();
+        }
+    }, 2000); // Update every 2 seconds
 }
 
 initialize();

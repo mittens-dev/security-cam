@@ -1,5 +1,5 @@
 {
-  "motion_threshold": 50,
+  "motion_threshold": 10,
   "motion_sensitivity": 20,
   "capture_on_motion": true,
   "burst_count": 4,
@@ -43,7 +43,7 @@
       1120
     ]
   ],
-  "use_regions": true,
+  "use_regions": false,
   "calibration_regions": [
     [
       18,
@@ -64,5 +64,26 @@
     "still_contrast": 0.6,
     "still_saturation": 0.6
   },
+  "zone_detection_enabled": true,
+  "zone_a": [
+    1561,
+    945,
+    1927,
+    1253
+  ],
+  "zone_b": [
+    430,
+    964,
+    707,
+    1137
+  ],
+  "zone_c": [
+    39,
+    950,
+    339,
+    1223
+  ],
+  "zone_frame_interval": 0.15,
+  "zone_cycle_duration": 5,
   "deduplicate_burst": false
 }

@@ -131,7 +131,7 @@
             <div class="regions-controls">
                 <button id="drawRegions" class="btn btn-primary">✏️ Draw Detection Zones</button>
                 <button id="clearRegions" class="btn btn-danger">🗑 Clear All Zones</button>
-                <label>
+                <label class="detection-mode-label">
                     <input type="checkbox" id="useRegions" />
                     Use Region-Based Detection
                 </label>
@@ -152,6 +152,63 @@
                 <span id="calibrationRegionsCount">0 regions defined</span>
             </div>
             <p class="info-text" style="margin-top: 0.5rem; color: #a0aec0; font-size: 0.9rem;">Calibration regions exclude areas (like sky) from brightness measurements for better auto-exposure.</p>
+        </section>
+
+        <!-- Corner Detection Zones -->
+        <section class="zones-section">
+            <h2>🚦 Corner Detection Zones</h2>
+            <div class="zones-controls">
+                <button id="drawCornerZones" class="btn btn-warning">✏️ Define A→B→C Zones</button>
+                <button id="clearCornerZones" class="btn btn-danger">🗑 Clear All Zones</button>
+                <label class="detection-mode-label">
+                    <input type="checkbox" id="zoneDetectionEnabled" />
+                    Use Corner Detection Mode
+                </label>
+            </div>
+            <div class="zones-status">
+                <div class="zone-indicator">
+                    <span class="zone-badge zone-a" id="zoneABadge">A</span>
+                    <span id="zoneAStatus">Not defined</span>
+                </div>
+                <div class="zone-indicator">
+                    <span class="zone-badge zone-b" id="zoneBBadge">B</span>
+                    <span id="zoneBStatus">Not defined</span>
+                </div>
+                <div class="zone-indicator">
+                    <span class="zone-badge zone-c" id="zoneCBadge">C</span>
+                    <span id="zoneCStatus">Not defined</span>
+                </div>
+            </div>
+            <div class="zones-settings">
+                <label for="zoneFrameInterval">Frame Interval (seconds):</label>
+                <input type="number" id="zoneFrameInterval" min="0.1" max="0.5" step="0.05" value="0.15" style="width: 80px;" />
+                <label for="zoneCycleDuration" style="margin-left: 1rem;">Cycle Duration (seconds):</label>
+                <input type="number" id="zoneCycleDuration" min="3" max="10" step="0.5" value="5.0" style="width: 80px;" />
+            </div>
+            <p class="info-text" style="margin-top: 0.5rem; color: #a0aec0; font-size: 0.9rem;">
+                Define 3 zones for corner tracking: Motion starts in Zone A, if it reaches Zone B but NOT Zone C within 5 seconds, a "corner" picture is saved.
+            </p>
+            <div class="zone-live-status" id="zoneLiveStatus" style="display:none; margin-top: 1rem; padding: 0.75rem; background: #1a202c; border-radius: 4px;">
+                <h4 style="margin: 0 0 0.5rem 0;">Live Detection Status</h4>
+                <div class="zone-status-grid">
+                    <div class="zone-status-item">
+                        <span class="zone-status-label">Zone A:</span>
+                        <span id="zoneATagged" class="zone-status-value">—</span>
+                    </div>
+                    <div class="zone-status-item">
+                        <span class="zone-status-label">Zone B:</span>
+                        <span id="zoneBTagged" class="zone-status-value">—</span>
+                    </div>
+                    <div class="zone-status-item">
+                        <span class="zone-status-label">Zone C:</span>
+                        <span id="zoneCTagged" class="zone-status-value">—</span>
+                    </div>
+                    <div class="zone-status-item">
+                        <span class="zone-status-label">Cycle:</span>
+                        <span id="zoneCycleStatus" class="zone-status-value">—</span>
+                    </div>
+                </div>
+            </div>
         </section>
     </div>
 
@@ -177,6 +234,58 @@
             <div class="modal-buttons">
                 <button id="saveRegions" class="btn btn-success">✓ Save Regions</button>
                 <button id="cancelRegions" class="btn btn-secondary">✗ Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Corner Zone Drawing Modal -->
+    <div id="cornerZoneModal" class="modal">
+        <div class="modal-content">
+            <h2>🚦 Define Corner Detection Zones</h2>
+            <p>Draw three zones in sequence: A (entry), B (corner), C (exit). Click and drag to define each zone.</p>
+            <div class="zone-drawing-header">
+                <div class="zone-steps">
+                    <button id="drawZoneA" class="zone-step-btn active" data-zone="a">
+                        <span class="zone-badge zone-a">A</span> Entry Zone
+                    </button>
+                    <button id="drawZoneB" class="zone-step-btn" data-zone="b">
+                        <span class="zone-badge zone-b">B</span> Corner Zone
+                    </button>
+                    <button id="drawZoneC" class="zone-step-btn" data-zone="c">
+                        <span class="zone-badge zone-c">C</span> Exit Zone
+                    </button>
+                </div>
+                <div class="current-zone-indicator">
+                    <span>Drawing: </span>
+                    <span class="zone-badge" id="currentZoneIndicator">A</span>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="canvas-container">
+                    <canvas id="cornerZoneCanvas"></canvas>
+                </div>
+                <div class="zones-list-panel">
+                    <h3>Defined Zones</h3>
+                    <div class="zone-def" id="zoneADef">
+                        <span class="zone-badge zone-a">A</span>
+                        <span id="zoneACoords">Not defined</span>
+                        <button class="btn-clear-zone" data-zone="a">✗</button>
+                    </div>
+                    <div class="zone-def" id="zoneBDef">
+                        <span class="zone-badge zone-b">B</span>
+                        <span id="zoneBCoords">Not defined</span>
+                        <button class="btn-clear-zone" data-zone="b">✗</button>
+                    </div>
+                    <div class="zone-def" id="zoneCDef">
+                        <span class="zone-badge zone-c">C</span>
+                        <span id="zoneCCoords">Not defined</span>
+                        <button class="btn-clear-zone" data-zone="c">✗</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <button id="saveCornerZones" class="btn btn-success">✓ Save Zones</button>
+                <button id="cancelCornerZones" class="btn btn-secondary">✗ Cancel</button>
             </div>
         </div>
     </div>

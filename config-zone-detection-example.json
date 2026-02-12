@@ -1,0 +1,20 @@
+{
+  "motion_threshold": 100,
+  "motion_sensitivity": 15,
+  "capture_on_motion": true,
+  "burst_count": 5,
+  "burst_interval": 0.5,
+  "cooldown_seconds": 5,
+  "detection_regions": [],
+  "use_regions": false,
+  "calibration_regions": [],
+  "use_calibration_regions": false,
+  "save_stills": true,
+  "camera_settings": {},
+  "zone_detection_enabled": true,
+  "zone_a": [200, 400, 600, 900],
+  "zone_b": [650, 400, 1200, 900],
+  "zone_c": [1250, 400, 2000, 900],
+  "zone_frame_interval": 0.15,
+  "zone_cycle_duration": 5.0
+}

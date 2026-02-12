@@ -49,7 +49,14 @@ config = {
     'calibration_regions': [],
     'use_calibration_regions': False,
     'save_stills': True,
-    'camera_settings': {}
+    'camera_settings': {},
+    # Zone detection for corner tracking
+    'zone_detection_enabled': False,
+    'zone_a': [],  # [x1, y1, x2, y2] in main stream coordinates
+    'zone_b': [],
+    'zone_c': [],
+    'zone_frame_interval': 0.15,  # seconds between frames (0.1-0.2)
+    'zone_cycle_duration': 5.0     # 5-second detection cycle
 }
 
 state = {
@@ -58,7 +65,13 @@ state = {
     'motion_detected': False,
     'last_motion': None,
     'active_profile': None,
-    'last_luminance': None
+    'last_luminance': None,
+    # Zone detection state
+    'zone_a_tagged': False,
+    'zone_b_tagged': False,
+    'zone_c_tagged': False,
+    'zone_cycle_start': None,
+    'zone_pictures': {}  # {'a': [], 'b': [], 'c': []} - stores image data
 }
 
 # Frame cache for preview (avoids camera lock contention)
@@ -441,6 +454,61 @@ def build_calibration_mask():
     return mask
 
 
+def build_zone_mask(zone_coords):
+    """Build a mask for a single zone in lores coordinates.
+    zone_coords: [x1, y1, x2, y2] in main stream coordinates
+    Returns mask in lores dimensions or None if zone is not defined.
+    """
+    if not zone_coords or len(zone_coords) != 4:
+        return None
+    
+    scale_x = LORES_SIZE[0] / MAIN_SIZE[0]
+    scale_y = LORES_SIZE[1] / MAIN_SIZE[1]
+    
+    x1, y1, x2, y2 = zone_coords
+    lx1 = int(x1 * scale_x)
+    ly1 = int(y1 * scale_y)
+    lx2 = int(x2 * scale_x)
+    ly2 = int(y2 * scale_y)
+    
+    mask = np.zeros((LORES_SIZE[1], LORES_SIZE[0]), dtype=np.uint8)
+    mask[ly1:ly2, lx1:lx2] = 255
+    return mask
+
+
+def detect_motion_in_zone(lores_frame, zone_mask, prev_frame):
+    """Detect motion in a specific zone.
+    Returns: (motion_detected, pixels_changed)
+    """
+    if zone_mask is None:
+        return False, 0
+    
+    w, h = LORES_SIZE
+    gray = lores_frame[:h, :w]
+    gray = cv2.GaussianBlur(gray, (21, 21), 0)
+    
+    if prev_frame is None:
+        return False, 0
+    
+    delta = cv2.absdiff(prev_frame, gray)
+    delta = cv2.bitwise_and(delta, zone_mask)
+    thresh = cv2.threshold(delta, config['motion_sensitivity'], 255, cv2.THRESH_BINARY)[1]
+    pixels = cv2.countNonZero(thresh)
+    
+    motion = pixels > config['motion_threshold']
+    return motion, pixels
+
+
+def reset_zone_detection():
+    """Reset all zone detection state for a new cycle"""
+    state['zone_a_tagged'] = False
+    state['zone_b_tagged'] = False
+    state['zone_c_tagged'] = False
+    state['zone_cycle_start'] = None
+    state['zone_pictures'] = {'a': [], 'b': [], 'c': []}
+    state['zone_pre_a_detection'] = False  # Tracks if B or C was detected before A
+
+
 def detect_motion_lores(lores_frame, region_mask=None):
     """Motion detection on the low-res YUV420 Y channel."""
     global prev_lores
@@ -579,6 +647,226 @@ def monitor_loop():
     print("Monitoring stopped", flush=True)
 
 
+def zone_monitor_loop():
+    """Zone-based corner detection monitoring loop.
+    
+    Detects sequential movement through zones A → B → C over a 5-second cycle:
+    - Motion in zone A tags A and starts the cycle
+    - Motion in zone B (with A tagged) tags B and saves the picture
+    - After 5 seconds:
+        - If C was NOT detected: save zone B picture with "corner" in filename
+        - If C WAS detected: discard all pictures
+    - Reset and start a new cycle
+    """
+    global prev_lores, state
+
+    print("Zone monitor loop starting...", flush=True)
+    state['monitoring'] = True
+
+    retry_count = 0
+    while not stop_flag.is_set() and retry_count < 3:
+        if not init_camera():
+            print(f"Camera init failed (retry {retry_count+1}/3)", flush=True)
+            retry_count += 1
+            time.sleep(2)
+            continue
+
+        try:
+            camera.start()
+            time.sleep(0.5)
+            camera.set_controls(get_camera_controls())
+            time.sleep(0.3)
+
+            prev_lores = None
+            reset_zone_detection()
+            
+            # Build zone masks
+            zone_a_mask = build_zone_mask(config.get('zone_a', []))
+            zone_b_mask = build_zone_mask(config.get('zone_b', []))
+            zone_c_mask = build_zone_mask(config.get('zone_c', []))
+            
+            if not all([zone_a_mask is not None, zone_b_mask is not None, zone_c_mask is not None]):
+                print("[zone] ERROR: All three zones must be defined!", flush=True)
+                state['monitoring'] = False
+                return
+            
+            print("Zone monitoring active (A→B→C corner detection)", flush=True)
+            retry_count = 0
+
+            frame_interval = config.get('zone_frame_interval', 0.15)
+            cycle_duration = config.get('zone_cycle_duration', 5.0)
+            rejection_cooldown = 2.0  # Wait 2 seconds after rejecting before allowing new cycles
+            last_rejection_time = 0
+            
+            last_heartbeat = time.time()
+
+            while not stop_flag.is_set():
+                try:
+                    current_time = time.time()
+
+                    # Heartbeat log every 5 minutes
+                    if current_time - last_heartbeat >= 300:
+                        print(f"[zone-heartbeat] Monitor alive, A={state['zone_a_tagged']}, "
+                              f"B={state['zone_b_tagged']}, C={state['zone_c_tagged']}", flush=True)
+                        last_heartbeat = current_time
+
+                    # Grab lores frame for motion detection
+                    lores_frame = camera.capture_array("lores")
+                    w, h = LORES_SIZE
+                    gray = lores_frame[:h, :w]
+                    gray = cv2.GaussianBlur(gray, (21, 21), 0)
+                    
+                    if prev_lores is None:
+                        prev_lores = gray
+                        time.sleep(frame_interval)
+                        continue
+                    
+                    # Check ALL zones for motion to ensure proper sequencing
+                    motion_a, pixels_a = detect_motion_in_zone(lores_frame, zone_a_mask, prev_lores)
+                    motion_b, pixels_b = detect_motion_in_zone(lores_frame, zone_b_mask, prev_lores)
+                    motion_c, pixels_c = detect_motion_in_zone(lores_frame, zone_c_mask, prev_lores)
+                    
+                    # Check zone A (start of cycle) - only if no cycle active
+                    if not state['zone_a_tagged']:
+                        # Check if B or C detected before A - this invalidates the sequence
+                        if (motion_b or motion_c) and not motion_a:
+                            if not state.get('zone_pre_a_detection', False):
+                                state['zone_pre_a_detection'] = True
+                                zones_detected = []
+                                if motion_b:
+                                    zones_detected.append(f"B({pixels_b}px)")
+                                if motion_c:
+                                    zones_detected.append(f"C({pixels_c}px)")
+                                print(f"[zone] ⚠ PRE-A DETECTION: {' '.join(zones_detected)} detected before Zone A - sequence invalid", flush=True)
+                        elif motion_a:
+                            # Only start cycle if no pre-A detection occurred AND cooldown passed
+                            time_since_rejection = current_time - last_rejection_time
+                            if state.get('zone_pre_a_detection', False):
+                                print(f"[zone] ✗ CYCLE REJECTED: Zone A detected at ({pixels_a}px) but B/C was detected first - invalid sequence", flush=True)
+                                state['zone_pre_a_detection'] = False  # Reset for next attempt
+                                last_rejection_time = current_time
+                            elif time_since_rejection < rejection_cooldown:
+                                print(f"[zone] ⏳ COOLDOWN: Zone A detected ({pixels_a}px) but in {rejection_cooldown}s cooldown period (t={time_since_rejection:.1f}s)", flush=True)
+                            else:
+                                # Valid start: Zone A first, no pre-detection, cooldown passed
+                                state['zone_a_tagged'] = True
+                                state['zone_cycle_start'] = current_time
+                                state['zone_pre_a_detection'] = False
+                                # Capture and store frame from zone A
+                                frame = camera.capture_array("main")
+                                img_data = frame_to_image(frame)
+                                state['zone_pictures']['a'].append(img_data)
+                                print(f"[zone] ✓ Zone A TRIGGERED (pixels={pixels_a}), cycle started at t=0.00s", flush=True)
+                        else:
+                            # No motion in any zone
+                            if state.get('zone_pre_a_detection', False):
+                                # Reset pre-detection flag after no motion for one frame
+                                state['zone_pre_a_detection'] = False
+                    
+                    # Check if cycle is active
+                    elif state['zone_cycle_start'] is not None:
+                        cycle_elapsed = current_time - state['zone_cycle_start']
+                        
+                        # Log frame data during active cycle
+                        print(f"[zone-frame] t={cycle_elapsed:.2f}s A={pixels_a}px B={pixels_b}px C={pixels_c}px "
+                              f"| Tagged: A={state['zone_a_tagged']} B={state['zone_b_tagged']} C={state['zone_c_tagged']}", 
+                              flush=True)
+                        
+                        # Check zone B (only if A is tagged and B not yet tagged)
+                        if state['zone_a_tagged'] and not state['zone_b_tagged']:
+                            if motion_b:
+                                state['zone_b_tagged'] = True
+                                # Capture and store frame from zone B
+                                frame = camera.capture_array("main")
+                                img_data = frame_to_image(frame)
+                                state['zone_pictures']['b'].append(img_data)
+                                print(f"[zone] Zone B TRIGGERED at t={cycle_elapsed:.2f}s (pixels={pixels_b})", flush=True)
+                        
+                        # Check zone C (only if B is tagged)
+                        if state['zone_b_tagged'] and not state['zone_c_tagged']:
+                            if motion_c:
+                                state['zone_c_tagged'] = True
+                                # Capture frame from zone C (for logging, will be discarded)
+                                frame = camera.capture_array("main")
+                                img_data = frame_to_image(frame)
+                                state['zone_pictures']['c'].append(img_data)
+                                print(f"[zone] Zone C TRIGGERED at t={cycle_elapsed:.2f}s (pixels={pixels_c})", flush=True)
+                        
+                        # Check if cycle time has elapsed
+                        if cycle_elapsed >= cycle_duration:
+                            print(f"[zone] === CYCLE COMPLETE at t={cycle_elapsed:.2f}s === "
+                                  f"A={state['zone_a_tagged']} B={state['zone_b_tagged']} C={state['zone_c_tagged']} | "
+                                  f"Pictures: A={len(state['zone_pictures']['a'])} "
+                                  f"B={len(state['zone_pictures']['b'])} "
+                                  f"C={len(state['zone_pictures']['c'])}", flush=True)
+                            
+                            # Cycle complete - decide what to save
+                            if state['zone_b_tagged'] and not state['zone_c_tagged']:
+                                # Corner detected! Save zone B picture
+                                if state['zone_pictures']['b']:
+                                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    profile_suffixes = {
+                                        'DAY_BRIGHT': 'DB',
+                                        'DAY': 'Da',
+                                        'DUSK_BRIGHT': 'KB',
+                                        'DUSK_DARK': 'KD',
+                                        'NIGHT': 'Ni'
+                                    }
+                                    profile_suffix = profile_suffixes.get(state.get('active_profile'), 'XX')
+                                    luminance = state.get('last_luminance', 0)
+                                    lum_str = f"L{luminance:.1f}"
+                                    
+                                    # Use the first picture from zone B
+                                    img = state['zone_pictures']['b'][0]
+                                    filename = f"corner_{ts}_{profile_suffix}_{lum_str}.jpg"
+                                    filepath = STILLS_DIR / filename
+                                    img.save(str(filepath), 'JPEG', quality=90)
+                                    print(f"[zone] ✓ CORNER SAVED: {filename} (valid A→B sequence, C not reached)", flush=True)
+                                    save_event(-1)  # Log event with special marker
+                                else:
+                                    print(f"[zone] ERROR: Zone B tagged but no picture stored!", flush=True)
+                            elif state['zone_c_tagged']:
+                                print(f"[zone] ✗ CORNER REJECTED: Zone C was reached (full A→B→C path)", flush=True)
+                                last_rejection_time = current_time
+                            else:
+                                print(f"[zone] ✗ CYCLE INVALID: No valid A→B sequence detected", flush=True)
+                                last_rejection_time = current_time
+                            
+                            # Reset for next cycle
+                            reset_zone_detection()
+                            prev_lores = None
+                    
+                    # Update previous frame
+                    prev_lores = gray
+                    time.sleep(frame_interval)
+
+                except Exception as e:
+                    print(f"[zone] Frame error: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    time.sleep(1)
+
+        except Exception as e:
+            print(f"[zone] Monitor error: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            retry_count += 1
+
+        finally:
+            try:
+                camera.stop()
+            except:
+                pass
+
+        if not stop_flag.is_set():
+            print(f"[zone] Restarting monitor (attempt {retry_count+1})", flush=True)
+            time.sleep(1)
+
+    state['monitoring'] = False
+    state['capturing'] = False
+    print("[zone] Zone monitoring stopped", flush=True)
+
+
 # === WEB ROUTES ===
 
 @app.route('/')
@@ -594,7 +882,32 @@ def serve_static(filename):
 
 @app.route('/api/status')
 def api_status():
-    return jsonify(state)
+    # Exclude non-serializable fields (PIL Image objects)
+    status_data = {k: v for k, v in state.items() if k != 'zone_pictures'}
+    return jsonify(status_data)
+
+
+@app.route('/api/zone-status')
+def api_zone_status():
+    """Get detailed zone detection status"""
+    return jsonify({
+        'enabled': config.get('zone_detection_enabled', False),
+        'zone_a_tagged': state.get('zone_a_tagged', False),
+        'zone_b_tagged': state.get('zone_b_tagged', False),
+        'zone_c_tagged': state.get('zone_c_tagged', False),
+        'cycle_active': state.get('zone_cycle_start') is not None,
+        'cycle_elapsed': time.time() - state['zone_cycle_start'] if state.get('zone_cycle_start') else 0,
+        'zone_a': config.get('zone_a', []),
+        'zone_b': config.get('zone_b', []),
+        'zone_c': config.get('zone_c', []),
+        'frame_interval': config.get('zone_frame_interval', 0.15),
+        'cycle_duration': config.get('zone_cycle_duration', 5.0),
+        'pictures_stored': {
+            'a': len(state.get('zone_pictures', {}).get('a', [])),
+            'b': len(state.get('zone_pictures', {}).get('b', [])),
+            'c': len(state.get('zone_pictures', {}).get('c', []))
+        }
+    })
 
 
 @app.route('/api/config', methods=['GET', 'PUT', 'POST'])
@@ -607,7 +920,9 @@ def api_config():
     data = request.get_json(silent=True) or {}
 
     regions_changed = ('detection_regions' in data or 'use_regions' in data or 
-                       'calibration_regions' in data or 'use_calibration_regions' in data)
+                       'calibration_regions' in data or 'use_calibration_regions' in data or
+                       'zone_detection_enabled' in data or 'zone_a' in data or 
+                       'zone_b' in data or 'zone_c' in data)
 
     for k, v in data.items():
         if k in config:
@@ -615,7 +930,7 @@ def api_config():
     save_config()
 
     if regions_changed and state['monitoring']:
-        print("[API] Regions changed, restarting monitor", flush=True)
+        print("[API] Regions/zones changed, restarting monitor", flush=True)
         stop_flag.set()
         if monitor_thread and monitor_thread.is_alive():
             monitor_thread.join(timeout=10)
@@ -625,10 +940,18 @@ def api_config():
         time.sleep(1)
         stop_flag.clear()
         state['monitoring'] = True
-        monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+        
+        # Choose monitoring mode based on zone_detection_enabled
+        if config.get('zone_detection_enabled', False):
+            print("[API] Starting zone-based corner detection monitoring", flush=True)
+            monitor_thread = threading.Thread(target=zone_monitor_loop, daemon=True)
+        else:
+            print("[API] Starting regular motion detection monitoring", flush=True)
+            monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+        
         monitor_thread.start()
         time.sleep(1)  # Let it initialize
-        print("[API] Monitor restarted with new mask", flush=True)
+        print("[API] Monitor restarted with new configuration", flush=True)
 
     return jsonify({'success': True, 'config': config})
 
@@ -644,7 +967,15 @@ def api_start():
 
     stop_flag.clear()
     state['monitoring'] = True
-    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    
+    # Choose monitoring mode based on zone_detection_enabled
+    if config.get('zone_detection_enabled', False):
+        print("[API] Starting zone-based corner detection monitoring", flush=True)
+        monitor_thread = threading.Thread(target=zone_monitor_loop, daemon=True)
+    else:
+        print("[API] Starting regular motion detection monitoring", flush=True)
+        monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    
     monitor_thread.start()
     time.sleep(0.5)
 
@@ -782,18 +1113,70 @@ def api_archive():
 
 @app.route('/api/preview', methods=['GET'])
 def api_preview():
-    """Get current camera frame for region drawing (uses frame cache)"""
+    """Get current camera frame for region drawing.
+    Works even if monitoring is off - temporarily grabs a frame for zone setup.
+    """
     global camera
 
-    if not state['monitoring'] or camera is None or not camera.started:
-        return jsonify({'error': 'Start monitoring first'}), 400
-
+    # If monitoring is active, use cached frame
+    if state['monitoring'] and camera and camera.started:
+        try:
+            buf = _get_cached_frame()
+            return send_file(buf, mimetype='image/jpeg')
+        except Exception as e:
+            print(f"Preview error (cached): {e}", flush=True)
+            # Fall through to one-shot capture
+    
+    # If camera exists but monitoring is off, use it directly
+    if camera is not None:
+        try:
+            print("[preview] Using existing camera for zone configuration", flush=True)
+            was_started = camera.started
+            
+            if not was_started:
+                camera.start()
+                time.sleep(0.5)
+            
+            frame = camera.capture_array("main")
+            buf = frame_to_jpeg_bytes(frame)
+            
+            if not was_started:
+                camera.stop()
+            
+            return send_file(buf, mimetype='image/jpeg')
+        except Exception as e:
+            print(f"Preview error (existing camera): {e}", flush=True)
+            # Camera might be in bad state, try to clean up
+            try:
+                camera.stop()
+                camera.close()
+                camera = None
+            except:
+                pass
+    
+    # No camera exists - create new one for one-shot capture
     try:
-        buf = _get_cached_frame()
+        print("[preview] Creating new camera for zone configuration", flush=True)
+        temp_camera = Picamera2()
+        video_config = temp_camera.create_video_configuration(
+            main={"size": MAIN_SIZE, "format": "RGB888"},
+            lores={"size": LORES_SIZE, "format": "YUV420"},
+            controls=get_camera_controls()
+        )
+        temp_camera.configure(video_config)
+        temp_camera.start()
+        time.sleep(0.5)
+        
+        frame = temp_camera.capture_array("main")
+        buf = frame_to_jpeg_bytes(frame)
+        
+        temp_camera.stop()
+        temp_camera.close()
+        
         return send_file(buf, mimetype='image/jpeg')
     except Exception as e:
-        print(f"Preview error: {e}", flush=True)
-        return jsonify({'error': str(e)}), 500
+        print(f"Preview error (new camera): {e}", flush=True)
+        return jsonify({'error': f'Preview failed: {str(e)}'}), 500
 
 
 @app.route('/api/camera-settings', methods=['GET'])
@@ -1017,7 +1400,15 @@ if __name__ == '__main__':
     stop_flag.clear()
     calibration_stop.clear()
     state['monitoring'] = True
-    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    
+    # Choose monitoring mode based on zone_detection_enabled
+    if config.get('zone_detection_enabled', False):
+        print("Starting zone-based corner detection monitoring", flush=True)
+        monitor_thread = threading.Thread(target=zone_monitor_loop, daemon=True)
+    else:
+        print("Starting regular motion detection monitoring", flush=True)
+        monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    
     monitor_thread.start()
 
     # Start auto-calibration for brightness/contrast
