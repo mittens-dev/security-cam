@@ -88,7 +88,7 @@ calibration_stop = threading.Event()
 calibration_trigger = threading.Event()  # Set to force immediate calibration
 monitor_thread = None
 
-LORES_SIZE = (320, 240)
+LORES_SIZE = (640, 480)  # Increased for better zone detection accuracy
 
 # MAIN_SIZE = (1280, 720)  # 720p resolution
 # MAIN_SIZE = (1920, 1080)  # 1080p resolution
@@ -171,6 +171,16 @@ CAMERA_PROFILES = {
 # # Below THRESHOLD_DUSK_DARK = NIGHT (artificial lighting, very low light)
 
 
+# Exposure-based thresholds (microseconds) for scene classification
+# Lower exposure time = brighter scene (camera needs less time to capture)
+# Higher exposure time = darker scene (camera needs more time to capture)
+THRESHOLD_NIGHT_EXPOSURE = 30000        # > 30ms = NIGHT (very dark)
+THRESHOLD_DUSK_DARK_EXPOSURE = 15000   # 15-30ms = DUSK_DARK
+THRESHOLD_DUSK_BRIGHT_EXPOSURE = 8000  # 8-15ms = DUSK_BRIGHT
+THRESHOLD_DAY_EXPOSURE = 3000          # 3-8ms = DAY
+# < 3ms = DAY_BRIGHT (very bright)
+
+# Luminance thresholds (legacy - now used only for display/logging)
 THRESHOLD_DAY_BRIGHT = 100  # Full sun, bright clouds, reflections
 THRESHOLD_DAY = 50         # Normal daylight (most of the day)
 THRESHOLD_DUSK_BRIGHT = 30 # Bright dusk, overcast, early golden hour
@@ -385,8 +395,14 @@ def capture_burst(count=None, interval=None):
     }
     profile_suffix = profile_suffixes.get(state.get('active_profile'), 'XX')
     
-    # Get current luminance for filename
-    luminance = state.get('last_luminance', 0)
+    # Measure current luminance at capture time for accurate filename
+    try:
+        lores = camera.capture_array("lores")
+        calibration_mask = build_calibration_mask()
+        luminance = measure_luminance_lores(lores, calibration_mask)
+    except:
+        # Fallback to cached value if measurement fails
+        luminance = state.get('last_luminance', 0)
     lum_str = f"L{luminance:.1f}"
 
     for i in range(count):
@@ -813,7 +829,15 @@ def zone_monitor_loop():
                                         'NIGHT': 'Ni'
                                     }
                                     profile_suffix = profile_suffixes.get(state.get('active_profile'), 'XX')
-                                    luminance = state.get('last_luminance', 0)
+                                    
+                                    # Measure current luminance at capture time for accurate filename
+                                    try:
+                                        lores = camera.capture_array("lores")
+                                        calibration_mask = build_calibration_mask()
+                                        luminance = measure_luminance_lores(lores, calibration_mask)
+                                    except:
+                                        # Fallback to cached value if measurement fails
+                                        luminance = state.get('last_luminance', 0)
                                     lum_str = f"L{luminance:.1f}"
                                     
                                     # Use the first picture from zone B
@@ -1314,23 +1338,31 @@ def auto_calibration_loop():
                 calibration_stop.wait(10)
                 continue
 
-            # Capture one lores frame and measure Y channel to avoid ISP feedback
-            # Use capture_array (non-blocking, safe for concurrent use)
+            # Get camera metadata (exposure time, gain) for scene classification
+            # This avoids ISP feedback loop where AE adjustments affect luminance measurement
+            metadata = camera.capture_metadata()
+            exposure_time = metadata.get("ExposureTime", 0)  # microseconds
+            analogue_gain = metadata.get("AnalogueGain", 1.0)
+            
+            # Also capture lores for luminance display (not used for classification)
             lores = camera.capture_array("lores")
             lum = measure_luminance_lores(lores, calibration_mask)
-            lum_unmasked = measure_luminance_lores(lores, None)  # For debug comparison
-            state['last_luminance'] = lum  # Store for API access
-            state['last_luminance_unmasked'] = lum_unmasked  # Debug: unmasked value
-            state['calibration_mask_active'] = calibration_mask is not None  # Debug
+            lum_unmasked = measure_luminance_lores(lores, None)
+            state['last_luminance'] = lum  # Store for display
+            state['last_luminance_unmasked'] = lum_unmasked
+            state['last_exposure_time'] = exposure_time  # Store for debugging
+            state['last_analogue_gain'] = analogue_gain
+            state['calibration_mask_active'] = calibration_mask is not None
 
-            # Classify scene based on lores luminance (5 profiles)
-            if lum >= THRESHOLD_DAY_BRIGHT:
+            # Classify scene based on exposure time (inverse relationship to brightness)
+            # Lower exposure = brighter scene, Higher exposure = darker scene
+            if exposure_time < THRESHOLD_DAY_EXPOSURE:
                 profile_name = "DAY_BRIGHT"
-            elif lum >= THRESHOLD_DAY:
+            elif exposure_time < THRESHOLD_DUSK_BRIGHT_EXPOSURE:
                 profile_name = "DAY"
-            elif lum >= THRESHOLD_DUSK_BRIGHT:
+            elif exposure_time < THRESHOLD_DUSK_DARK_EXPOSURE:
                 profile_name = "DUSK_BRIGHT"
-            elif lum >= THRESHOLD_DUSK_DARK:
+            elif exposure_time < THRESHOLD_NIGHT_EXPOSURE:
                 profile_name = "DUSK_DARK"
             else:
                 profile_name = "NIGHT"
@@ -1339,10 +1371,9 @@ def auto_calibration_loop():
             if profile_name != active_profile:
                 profile = CAMERA_PROFILES[profile_name]
                 
-                mask_info = " [masked]" if calibration_mask is not None else ""
-
                 print(
-                    f"[calibration] Switching profile -> {profile_name} (lum={lum:.0f}{mask_info})",
+                    f"[calibration] Switching profile -> {profile_name} "
+                    f"(exposure={exposure_time/1000:.1f}ms, gain={analogue_gain:.1f}x, lum={lum:.0f})",
                     flush=True
                 )
 
@@ -1359,9 +1390,9 @@ def auto_calibration_loop():
                 except Exception as e:
                     print(f"[calibration] Failed to apply profile: {e}", flush=True)
             else:
-                mask_info = " [masked]" if calibration_mask is not None else ""
                 print(
-                    f"[calibration] Profile {active_profile} stable (lum={lum:.0f}{mask_info})",
+                    f"[calibration] Profile {active_profile} stable "
+                    f"(exposure={exposure_time/1000:.1f}ms, gain={analogue_gain:.1f}x, lum={lum:.0f})",
                     flush=True
                 )
 
