@@ -6,7 +6,8 @@ const API_BASE = '/api';
 let state = {
     monitoring: false,
     capturing: false,
-    config: {}
+    config: {},
+    userEditingConfig: false  // Prevent auto-refresh from overwriting user input
 };
 
 // DOM Elements
@@ -120,6 +121,11 @@ function updateStatusDisplay(status) {
 }
 
 function updateConfigDisplay(cfg) {
+    // Don't overwrite fields if user is actively editing
+    if (state.userEditingConfig) {
+        return;
+    }
+    
     elements.captureOnMotion.checked = cfg.capture_on_motion;
     elements.motionThreshold.value = cfg.motion_threshold;
     elements.motionSensitivity.value = cfg.motion_sensitivity;
@@ -312,6 +318,7 @@ elements.takeSnapshot.addEventListener('click', async () => {
 
 elements.saveConfig.addEventListener('click', async () => {
     try {
+        state.userEditingConfig = false;  // Clear editing flag on save
         const cfg = {
             capture_on_motion: elements.captureOnMotion.checked,
             motion_threshold: parseInt(elements.motionThreshold.value),
@@ -327,6 +334,7 @@ elements.saveConfig.addEventListener('click', async () => {
 
 elements.refreshConfig.addEventListener('click', async () => {
     try {
+        state.userEditingConfig = false;  // Allow refresh on explicit refresh
         await loadStatus();
         showAlert('Settings refreshed', 'success');
     } catch (e) { console.error(e); }
@@ -1359,6 +1367,23 @@ async function initialize() {
     // Initialize corner zone display and mode highlight
     updateZoneStatusDisplay();
     updateDetectionModeHighlight();
+    
+    // Mark user as editing when they change any config input
+    const configInputs = [
+        elements.motionThreshold,
+        elements.motionSensitivity,
+        elements.burstCount,
+        elements.burstInterval,
+        elements.cooldownSeconds
+    ];
+    configInputs.forEach(input => {
+        input.addEventListener('input', () => {
+            state.userEditingConfig = true;
+        });
+        input.addEventListener('focus', () => {
+            state.userEditingConfig = true;
+        });
+    });
 
     // Auto-refresh
     setInterval(loadStatus, 5000);

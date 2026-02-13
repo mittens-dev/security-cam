@@ -1,5 +1,5 @@
 {
-  "motion_threshold": 10,
+  "motion_threshold": 5,
   "motion_sensitivity": 20,
   "capture_on_motion": true,
   "burst_count": 4,
@@ -72,16 +72,16 @@
     1253
   ],
   "zone_b": [
-    430,
-    964,
-    707,
-    1137
+    556,
+    977,
+    688,
+    1105
   ],
   "zone_c": [
     39,
-    950,
-    339,
-    1223
+    962,
+    180,
+    1174
   ],
   "zone_frame_interval": 0.15,
   "zone_cycle_duration": 5,
